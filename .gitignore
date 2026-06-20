@@ -1,0 +1,6 @@
+/archive/
+temp/
+warcs/
+*.csv
+*.zst
+records.jsonl
