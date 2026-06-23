@@ -185,14 +185,37 @@ func main() {
 			}
 		}
 
+		var outcome string
 		records, err := archive(fmt.Sprintf("%d", job))
 		if err != nil {
 			logger.Error("failed to archive job", zap.Error(err))
-			pendingUploads.AddJob(job, records, bitclient.MapFail, tracker)
-			continue
+			outcome = bitclient.MapFail
+		} else {
+			logger.Info("archived job", zap.Uint64("job", job))
+			outcome = bitclient.MapDone
 		}
-		pendingUploads.AddJob(job, records, bitclient.MapDone, tracker)
-		logger.Info("archived job", zap.Uint64("job", job))
+		pendingUploads.AddJob(job, records, bitclient.MapFail, tracker)
+
+		metadataRecord := warc.NewRecord(client.TempDir)
+
+		metadataRecord.Header.Set("WARC-Type", "metadata")
+		metadataRecord.Header.Set("WARC-Target-URI", "urn:saveweb:"+PROJECT+":"+fmt.Sprintf("%d", job))
+		metadataRecord.Header.Set("Content-Type", "application/warc-fields")
+
+		for _, record := range records {
+			if record.RecordInfo.Header.Get("WARC-Type") == "response" {
+				metadataRecord.Header.Add("WARC-Concurrent-To", record.RecordInfo.Header.Get("WARC-Record-ID"))
+			}
+		}
+
+		metadataRecord.Content.Write([]byte("contributor: " + ARCHIVIST + "\n"))
+		metadataRecord.Content.Write([]byte("SavewebJobOutcome: " + outcome + "\n"))
+		batch := warc.NewRecordBatch(make(chan warc.FeedbackEvent, 1))
+		batch.Records = append(batch.Records, metadataRecord)
+		client.WARCWriter <- batch
+		// Wait for the metadata record to be written
+		<-batch.FeedbackChan
+
 	}
 
 	if client != nil {
@@ -217,6 +240,8 @@ type PendingUploads struct {
 	mu                 sync.Mutex
 }
 
+// if len(records) == 0: call the tracker to change the job status.
+// else, defer the call until the warc of the job is uploaded (called by `OnWARCUploaded()`)
 func (pu *PendingUploads) AddJob(job uint64, records []warc.RecordEvent, outcome string, tracker *bitclient.Client) {
 	pu.mu.Lock()
 	defer pu.mu.Unlock()
