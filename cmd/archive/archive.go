@@ -1,12 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strconv"
+
+	warc "github.com/saveweb/gowarc"
 )
 
 type FileRef struct {
@@ -25,24 +24,19 @@ type Meta struct {
 	Files      []FileRef `json:"files"`
 }
 
-func archive(vid string) error {
+func archive(vid string) (allWarcRecEvents []warc.RecordEvent, err error) {
 	log.Printf("=== VID %s ===", vid)
 
-	videoID, err := getVideoID(vid)
+	videoID, recordsIDs, err := getVideoID(vid)
 	if err != nil {
-		return err
+		return allWarcRecEvents, err
 	}
+	allWarcRecEvents = append(allWarcRecEvents, recordsIDs...)
+
 	log.Printf("video_id = %s", videoID)
 
-	info, rawResp, err := getPlayInfo(videoID)
-	dir := filepath.Join(flagOutput, vid)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	if rawResp != nil {
-		os.WriteFile(filepath.Join(dir, "api_response.json"), rawResp, 0644)
-	}
+	info, _, recordsIDs, err := getPlayInfo(videoID)
+	allWarcRecEvents = append(allWarcRecEvents, recordsIDs...)
 
 	if err != nil {
 		log.Printf("  play api failed: %v, trying sources directly", err)
@@ -69,20 +63,17 @@ func archive(vid string) error {
 	}
 
 	for id := range known {
-		u, ext, sz, ok := probeSRC(id)
+		u, ext, sz, recs, ok := probeSRC(id)
+		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if !ok {
 			log.Printf("  VID %s: not on source", id)
 			continue
 		}
 		name := fmt.Sprintf("%s.%s", id, ext)
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err == nil {
-			log.Printf("  %s: already exists, skip", name)
-			meta.Files = append(meta.Files, FileRef{VID: id, Ext: ext, Size: sz, Filename: name})
-			continue
-		}
 		log.Printf("  downloading %s (%d bytes)...", name, sz)
-		if err := download(u, path); err != nil {
+		recs, err := download(u)
+		allWarcRecEvents = append(allWarcRecEvents, recs...)
+		if err != nil {
 			log.Printf("  download %s failed: %v", name, err)
 			continue
 		}
@@ -90,9 +81,6 @@ func archive(vid string) error {
 		log.Printf("  saved %s", name)
 	}
 
-	mj, _ := json.MarshalIndent(meta, "", "  ")
-	os.WriteFile(filepath.Join(dir, "metadata.json"), mj, 0644)
-
 	log.Printf("=== VID %s done: %d files ===", vid, len(meta.Files))
-	return nil
+	return allWarcRecEvents, nil
 }

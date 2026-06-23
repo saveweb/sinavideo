@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+
+	http "github.com/saveweb/fhttp"
+	warc "github.com/saveweb/gowarc"
 )
 
 // var client = &http.Client{Timeout: 30 * time.Second}
@@ -37,65 +40,86 @@ type VideoFile struct {
 }
 
 // getvideoidbyvid
-func getVideoID(vid string) (string, error) {
+func getVideoID(vid string) (videoid string, recordsEvents []warc.RecordEvent, err error) {
 	url := "https://s.video.sina.com.cn/video/getvideoidbyvid?vid=" + vid
 	log.Println("getVideoID", url)
-	r, err := client.Get(url)
+	req, _ := http.NewRequest("GET", url, nil)
+
+	feedbackCh := make(chan warc.FeedbackEvent, 1)
+	defer func() {
+		recordsEvents = <-feedbackCh
+	}()
+	reqCtx := req.Context()
+	reqCtx = warc.WithFeedbackChannel(reqCtx, feedbackCh)
+
+	r, err := client.Do(req.WithContext(reqCtx))
 	if err != nil {
-		return "", err
+		return "", recordsEvents, err
 	}
 	defer r.Body.Close()
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		return "", err
+		return "", recordsEvents, err
 	}
+
 	var v VidResp
+
 	if err := json.Unmarshal(bodyBytes, &v); err != nil {
-		return "", errors.Join(err, fmt.Errorf("unmarshal vid resp: %s", string(bodyBytes)))
+		return "", recordsEvents, errors.Join(err, fmt.Errorf("unmarshal vid resp: %s", string(bodyBytes)))
 	}
 	if v.Code == 0 {
-		return "", fmt.Errorf("vid %s not found in api", vid)
+		return "", recordsEvents, fmt.Errorf("vid %s not found in api", vid)
 	}
 	if v.Code != 1 {
-		return "", fmt.Errorf("expected code 1, got %d, message: %s", v.Code, v.Message)
+		return "", recordsEvents, fmt.Errorf("expected code 1, got %d, message: %s", v.Code, v.Message)
 	}
 
 	data, ok := v.Data.(map[string]any)
 	if !ok {
-		return "", fmt.Errorf("unexpected data type: %T", v.Data)
+		return "", recordsEvents, fmt.Errorf("unexpected data type: %T", v.Data)
 	}
 	VideoID := data["video_id"].(string)
-	return VideoID, nil
+	return VideoID, recordsEvents, nil
 }
 
-func getPlayInfo(videoID string) (*PlayData, json.RawMessage, error) {
+func getPlayInfo(videoID string) (playdata *PlayData, rawResp json.RawMessage, recordsEvents []warc.RecordEvent, err error) {
 	url := "http://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id=" + videoID
 	log.Println("getPlayInfo", url)
-	r, err := client.Get(url)
+
+	req, _ := http.NewRequest("GET", url, nil)
+
+	feedbackCh := make(chan warc.FeedbackEvent, 1)
+	defer func() {
+		recordsEvents = <-feedbackCh
+	}()
+	reqCtx := req.Context()
+	reqCtx = warc.WithFeedbackChannel(reqCtx, feedbackCh)
+
+	r, err := client.Do(req.WithContext(reqCtx))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, recordsEvents, err
 	}
 	defer r.Body.Close()
 
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, recordsEvents, err
 	}
 
 	var p PlayResp
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, nil, err
+	if err = json.Unmarshal(raw, &p); err != nil {
+		return
 	}
 	switch p.Code {
 	case 0:
-		return nil, raw, fmt.Errorf("play api error, expected code 1, got %d, message: %s", p.Code, p.Message)
+		return nil, raw, recordsEvents, fmt.Errorf("play api error, expected code 1, got %d, message: %s", p.Code, p.Message)
 	case 1:
 		var data PlayData
 		if err := json.Unmarshal(p.Data, &data); err != nil {
-			return nil, raw, fmt.Errorf("unmarshal play data: %w", err)
+			return nil, raw, recordsEvents, fmt.Errorf("unmarshal play data: %w", err)
 		}
-		return &data, raw, nil
+		return &data, raw, recordsEvents, nil
 	default:
-		return nil, raw, fmt.Errorf("unexpected code: %d, message: %s", p.Code, p.Message)
+		return nil, raw, recordsEvents, fmt.Errorf("unexpected code: %d, message: %s", p.Code, p.Message)
 	}
 }
