@@ -4,3 +4,4 @@ warcs/
 *.csv
 *.zst
 records.jsonl
+*.log
