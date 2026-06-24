@@ -13,6 +13,9 @@ type FileRef struct {
 	Ext      string `json:"ext"`
 	Size     int64  `json:"size"`
 	Filename string `json:"filename"`
+	// Source 标记该文件的来源："main" 为主档高清（vid/file_id），
+	// "ipad" 为 ipad_vid 低清整段 MP4（来自 video_ids.php）。
+	Source string `json:"source"`
 }
 
 type Meta struct {
@@ -22,6 +25,14 @@ type Meta struct {
 	CreateTime string    `json:"create_time"`
 	DurationMS int64     `json:"duration_ms"`
 	Files      []FileRef `json:"files"`
+}
+
+// taggedCandidate 给候选下载项挂上来源标记（main / ipad）与对应的 id，
+// 便于下载成功后回填 meta.Files。
+type taggedCandidate struct {
+	Candidate
+	Source string
+	ID     string
 }
 
 func archive(vid string) (allWarcRecEvents []warc.RecordEvent, err error) {
@@ -55,6 +66,7 @@ func archive(vid string) (allWarcRecEvents []warc.RecordEvent, err error) {
 		meta.DurationMS = d
 	}
 
+	// 收集所有要探测的 id：主 vid + play API 返回的分段 file_id
 	known := map[string]bool{vid: true}
 	for _, f := range info.Videos {
 		if f.FileID != "" {
@@ -62,25 +74,69 @@ func archive(vid string) (allWarcRecEvents []warc.RecordEvent, err error) {
 		}
 	}
 
+	// 对每个 id 探测「所有源 × 全扩展名」，收集全部 200 命中的候选。
+	var cands []taggedCandidate
 	for id := range known {
-		u, ext, sz, recs, ok := probeSRC(id)
+		cs, recs := probeCandidates(id, exts)
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
-		if !ok {
-			log.Printf("  VID %s: not on source", id)
+		for _, c := range cs {
+			cands = append(cands, taggedCandidate{Candidate: c, Source: "main", ID: id})
+		}
+	}
+
+	// ipad_vid 低清整段 MP4 通道：作为 >=6min 分段视频的兜底来源，
+	// 也是不同质量版本，与主档一并存档。只探测 .mp4（低清 MP4 的固定格式）。
+	if ipadVID, recs, ipadErr := getIpadVID(vid); ipadErr != nil {
+		allWarcRecEvents = append(allWarcRecEvents, recs...)
+		log.Printf("  ipad_vid lookup failed: %v", ipadErr)
+	} else {
+		allWarcRecEvents = append(allWarcRecEvents, recs...)
+		if ipadVID != "" && ipadVID != vid && !known[ipadVID] {
+			cs, recs := probeCandidates(ipadVID, []string{"mp4"})
+			allWarcRecEvents = append(allWarcRecEvents, recs...)
+			for _, c := range cs {
+				cands = append(cands, taggedCandidate{Candidate: c, Source: "ipad", ID: ipadVID})
+			}
+		}
+	}
+
+	// ETag 去重：三个源共享大量数据，同一文件常能通过多个 URL 访问且 ETag 一致；
+	// 按 ETag 去重后在最大化覆盖率的同时避免重复下载同一字节。
+	// 注意 main 与 ipad 的 ETag 必然不同（不同质量版本），不会被互相去重。
+	uniq := dedupeByETag(untag(cands))
+	want := map[string]taggedCandidate{} // url -> tag
+	for _, c := range uniq {
+		for _, t := range cands {
+			if t.URL == c.URL {
+				want[t.URL] = t
+				break
+			}
+		}
+	}
+
+	for u, t := range want {
+		name := fmt.Sprintf("%s.%s", t.ID, t.Ext)
+		log.Printf("  downloading %s (%d bytes)...", name, t.Size)
+		recs, derr := download(u)
+		allWarcRecEvents = append(allWarcRecEvents, recs...)
+		if derr != nil {
+			log.Printf("  download %s failed: %v", name, derr)
 			continue
 		}
-		name := fmt.Sprintf("%s.%s", id, ext)
-		log.Printf("  downloading %s (%d bytes)...", name, sz)
-		recs, err := download(u)
-		allWarcRecEvents = append(allWarcRecEvents, recs...)
-		if err != nil {
-			log.Printf("  download %s failed: %v", name, err)
-			continue
-		}
-		meta.Files = append(meta.Files, FileRef{VID: id, Ext: ext, Size: sz, Filename: name})
+		meta.Files = append(meta.Files, FileRef{VID: t.ID, Ext: t.Ext, Size: t.Size, Filename: name, Source: t.Source})
 		log.Printf("  saved %s", name)
 	}
 
 	log.Printf("=== VID %s done: %d files ===", vid, len(meta.Files))
 	return allWarcRecEvents, nil
 }
+
+// untag 仅用于给 dedupeByETag 喂数据，保留指针关联。
+func untag(in []taggedCandidate) []Candidate {
+	out := make([]Candidate, len(in))
+	for i, c := range in {
+		out[i] = c.Candidate
+	}
+	return out
+}
+
