@@ -224,6 +224,8 @@ func main() {
 		}
 	}
 
+	close(WARCFilenameFeedbackChan)
+
 	wg.Wait()
 }
 
