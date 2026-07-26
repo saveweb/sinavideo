@@ -19,24 +19,24 @@ import (
 	"time"
 
 	"github.com/bdragon300/tusgo"
-	bitclient "github.com/saveweb/bit_client"
 	warc "github.com/saveweb/gowarc"
+	"github.com/saveweb/hq/pkg/protocol"
+	"github.com/saveweb/hq/sdk/worker"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 var flagDebufOutput string
-var ARCHIVIST string
 
 func init() {
 	flag.StringVar(&flagDebufOutput, "o", "", "debug output directory (for dev only)")
-	flag.StringVar(&ARCHIVIST, "", "archivist", "archivist name")
 }
 
-var client = &warc.CustomHTTPClient{}
+var client *warc.CustomHTTPClient
 var logger *zap.Logger
 
-const PROJECT = "sinavideo_64"
+const HQProject = "sinavideo"
+const HQClientVersion = "sinavideo/2.4.0"
 
 func main() {
 	flag.Parse()
@@ -44,22 +44,6 @@ func main() {
 	HOSTNAME, err := os.Hostname()
 	if err != nil {
 		log.Fatal(err)
-	}
-
-	if ARCHIVIST == "" {
-		ARCHIVIST = os.Getenv("ARCHIVIST")
-		if ARCHIVIST == "" {
-			log.Fatal("-archivist not set and ARCHIVIST environment variable not set")
-		}
-	}
-
-	if len(ARCHIVIST) > 20 {
-		log.Fatal("archivist must be 20 characters or less")
-	}
-
-	// ARCHIVIST only allows a-z0-9 and - and _
-	if !regexp.MustCompile(`^[a-z0-9_-]+$`).MatchString(ARCHIVIST) {
-		log.Fatal("-archivist must be alphanumeric and may contain - and _")
 	}
 
 	USER_AGENT := "Mozilla/5.0 (compatible; saveweb) sinavideo_archive/020260620"
@@ -128,24 +112,32 @@ func main() {
 	baseLogger := zap.New(core, zap.AddCaller())
 	defer baseLogger.Sync()
 
-	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", PROJECT), zap.String("archivist", ARCHIVIST), zap.String("hostname", HOSTNAME)))
+	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("hostname", HOSTNAME)))
 
-	tracker, err := bitclient.NewClient(
-		bitclient.WithBaseURL("https://bittracker.saveweb.org"),
-		bitclient.WithProject(PROJECT),
-		bitclient.WithUserAgent("sinavideo/1.0"),
-	)
+	hqURL := os.Getenv("HQ_TRACKER_URL")
+	hqMachineToken := os.Getenv("HQ_MACHINE_TOKEN")
+	if hqURL == "" || hqMachineToken == "" {
+		logger.Fatal("HQ_TRACKER_URL and HQ_MACHINE_TOKEN must be set")
+	}
+	hqConfig := worker.Config{
+		TrackerURL: hqURL, MachineToken: hqMachineToken,
+		ClientVersion: HQClientVersion,
+	}
+	ctx := context.Background()
+	userID, err := worker.WhoAmI(ctx, hqConfig)
+	if err != nil {
+		logger.Fatal("failed to resolve HQ user", zap.Error(err))
+	}
+	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("user_id", userID), zap.String("hostname", HOSTNAME)))
+
+	tracker, err := worker.OpenProjectQueue(ctx, hqConfig, HQProject)
 	if err != nil {
 		logger.Fatal("failed to create tracker", zap.Error(err))
 	}
 	defer tracker.Close()
+	logger.Info("opened HQ project queue", zap.String("worker_id", tracker.WorkerID()), zap.String("project", HQProject))
 
-	ctx := context.Background()
-	if err := tracker.Connect(ctx); err != nil { // fetches QoS, starts refresh loop
-		logger.Fatal("failed to connect to tracker", zap.Error(err))
-	}
-
-	pendingUploads := &PendingUploads{}
+	pendingUploads := NewPendingUploads()
 
 	var wg sync.WaitGroup
 
@@ -154,7 +146,7 @@ func main() {
 		for filename := range WARCFilenameFeedbackChan {
 			logger.Info("uploading warc", zap.String("filename", filename))
 			for {
-				err := UploadWARC(filepath.Join("./warcs", filename), ARCHIVIST)
+				err := UploadWARC(filepath.Join("./warcs", filename), userID)
 				if err != nil {
 					logger.Error("failed to upload warc, wait 15s and retry", zap.Error(err))
 					time.Sleep(15 * time.Second)
@@ -163,18 +155,27 @@ func main() {
 				break
 			}
 			logger.Info("uploaded warc", zap.String("filename", filename))
-			pendingUploads.OnWARCUploaded(filename, tracker)
+			pendingUploads.OnWARCUploaded(filename)
 		}
 		logger.Info("warc uploader closed")
 	})
 
 	for {
-		job, err := tracker.Claim(ctx)
+		batch, err := tracker.Claim(ctx, worker.ClaimOptions{MaxJobs: 1, AcceptTypes: []string{protocol.JobTypeSeed}})
 		if err != nil {
-			if errors.Is(err, bitclient.ErrNoBitsToClaim) {
-				break
-			}
-			logger.Error("failed to claim job", zap.Error(err))
+			logger.Fatal("failed to claim HQ job", zap.Error(err), zap.String("client_version", HQClientVersion))
+		}
+		if len(batch.Jobs) == 0 {
+			break
+		}
+		job := batch.Jobs[0]
+		vid := job.Spec.Value
+		if !regexp.MustCompile(`^[0-9]+$`).MatchString(vid) {
+			logger.Error("HQ job value is not a vid", zap.Int64("job", job.JobID), zap.String("value", vid))
+			pendingUploads.AddJob(job, nil, protocol.Outcome{}, &worker.Failure{
+				Retryable: false,
+				Error:     protocol.ExecutionError{Code: "invalid_vid", Message: "job value must be a decimal vid", Details: protocol.Attrs{}},
+			})
 			continue
 		}
 
@@ -185,21 +186,22 @@ func main() {
 			}
 		}
 
-		var outcome string
-		records, err := archive(fmt.Sprintf("%d", job))
+		var outcome protocol.OutcomeKind
+		records, err := archive(vid)
+		var failure *worker.Failure
 		if err != nil {
 			logger.Error("failed to archive job", zap.Error(err))
-			outcome = bitclient.MapFail
+			failure = &worker.Failure{Retryable: true, Error: protocol.ExecutionError{Code: "archive_failed", Message: err.Error(), Details: protocol.Attrs{}}}
 		} else {
-			logger.Info("archived job", zap.Uint64("job", job))
-			outcome = bitclient.MapDone
+			logger.Info("archived job", zap.Int64("job", job.JobID), zap.String("vid", vid))
+			outcome = protocol.OutcomeSuccess
 		}
-		pendingUploads.AddJob(job, records, bitclient.MapFail, tracker)
+		pendingUploads.AddJob(job, records, protocol.Outcome{Kind: outcome, Meta: protocol.Attrs{"vid": vid}}, failure)
 
 		metadataRecord := warc.NewRecord(client.TempDir)
 
 		metadataRecord.Header.Set("WARC-Type", "metadata")
-		metadataRecord.Header.Set("WARC-Target-URI", "urn:saveweb:"+PROJECT+":"+fmt.Sprintf("%d", job))
+		metadataRecord.Header.Set("WARC-Target-URI", "urn:saveweb:"+HQProject+":"+vid)
 		metadataRecord.Header.Set("Content-Type", "application/warc-fields")
 
 		for _, record := range records {
@@ -208,13 +210,13 @@ func main() {
 			}
 		}
 
-		metadataRecord.Content.Write([]byte("contributor: " + ARCHIVIST + "\n"))
-		metadataRecord.Content.Write([]byte("SavewebJobOutcome: " + outcome + "\n"))
-		batch := warc.NewRecordBatch(make(chan warc.FeedbackEvent, 1))
-		batch.Records = append(batch.Records, metadataRecord)
-		client.WARCWriter <- batch
+		metadataRecord.Content.Write([]byte("contributor: " + userID + "\n"))
+		metadataRecord.Content.Write([]byte("SavewebJobOutcome: " + string(outcome) + "\n"))
+		recordBatch := warc.NewRecordBatch(make(chan warc.FeedbackEvent, 1))
+		recordBatch.Records = append(recordBatch.Records, metadataRecord)
+		client.WARCWriter <- recordBatch
 		// Wait for the metadata record to be written
-		<-batch.FeedbackChan
+		<-recordBatch.FeedbackChan
 
 	}
 
@@ -230,47 +232,59 @@ func main() {
 }
 
 type JobWithRecordInfoOutcome struct {
-	uint64
+	job          *worker.Job
 	RecordInfo   warc.RecordInfo
 	WARCFilename string
 }
 
 type PendingUploads struct {
-	RecordsByJob       map[uint64][]*JobWithRecordInfoOutcome // job->[]unuploaded_records
-	JobsByWARCFilename map[string][]uint64                    // warcFilename->[]job
-	OutcomeByJob       map[uint64]string                      // job::outcome
+	RecordsByJob       map[int64][]*JobWithRecordInfoOutcome // job->[]unuploaded_records
+	JobsByWARCFilename map[string][]int64                    // warcFilename->[]job
+	CompletionByJob    map[int64]jobCompletion               // job::outcome
 	mu                 sync.Mutex
 }
 
-// if len(records) == 0: call the tracker to change the job status.
-// else, defer the call until the warc of the job is uploaded (called by `OnWARCUploaded()`)
-func (pu *PendingUploads) AddJob(job uint64, records []warc.RecordEvent, outcome string, tracker *bitclient.Client) {
+type jobCompletion struct {
+	job     *worker.Job
+	outcome protocol.Outcome
+	failure *worker.Failure
+}
+
+func NewPendingUploads() *PendingUploads {
+	return &PendingUploads{
+		RecordsByJob:       make(map[int64][]*JobWithRecordInfoOutcome),
+		JobsByWARCFilename: make(map[string][]int64),
+		CompletionByJob:    make(map[int64]jobCompletion),
+	}
+}
+
+// Jobs without response records finish immediately. Others wait until every
+// WARC containing their records has been uploaded.
+func (pu *PendingUploads) AddJob(job *worker.Job, records []warc.RecordEvent, outcome protocol.Outcome, failure *worker.Failure) {
 	pu.mu.Lock()
 	defer pu.mu.Unlock()
 
 	if len(records) == 0 {
-		if err := tracker.Move(context.TODO(), job, bitclient.MapWIP, outcome); err != nil {
-			logger.Error("failed to move job (0 records, fast-path)", zap.Error(err), zap.Uint64("job", job), zap.String("outcome", outcome))
-		}
+		pu.finish(jobCompletion{job: job, outcome: outcome, failure: failure}, "fast path")
 		return
 	}
 
 	for _, record := range records {
-		pu.RecordsByJob[job] = append(pu.RecordsByJob[job], &JobWithRecordInfoOutcome{
-			uint64:       job,
+		pu.RecordsByJob[job.JobID] = append(pu.RecordsByJob[job.JobID], &JobWithRecordInfoOutcome{
+			job:          job,
 			RecordInfo:   record.RecordInfo,
 			WARCFilename: record.WARCFilename,
 		})
-		pu.JobsByWARCFilename[record.WARCFilename] = append(pu.JobsByWARCFilename[record.WARCFilename], job)
+		pu.JobsByWARCFilename[record.WARCFilename] = append(pu.JobsByWARCFilename[record.WARCFilename], job.JobID)
 	}
-	pu.OutcomeByJob[job] = outcome
+	pu.CompletionByJob[job.JobID] = jobCompletion{job: job, outcome: outcome, failure: failure}
 }
 
-func (pu *PendingUploads) OnWARCUploaded(warcFilename string, tracker *bitclient.Client) {
+func (pu *PendingUploads) OnWARCUploaded(warcFilename string) {
 	pu.mu.Lock()
 	defer pu.mu.Unlock()
 	for _, job := range pu.JobsByWARCFilename[warcFilename] {
-		outcome := pu.OutcomeByJob[job]
+		completion := pu.CompletionByJob[job]
 		jobRecordsTotal := len(pu.RecordsByJob[job]) // job 可能横跨多个 warcs 的 records 总数
 		jobRecordsInsideWARC := 0                    // job 在此 warc 内的 records 总数
 		jobRecordsOutsideWARC := 0                   // job 在此 warc 外的 records 总数
@@ -289,15 +303,9 @@ func (pu *PendingUploads) OnWARCUploaded(warcFilename string, tracker *bitclient
 		}
 
 		if jobRecordsTotal-jobRecordsInsideWARC == 0 {
-			// job 的全部 records 已经全部上传完成，可以发确认然后删除 job
-			err := tracker.Move(context.TODO(), job, bitclient.MapWIP, outcome)
-			if err != nil {
-				logger.Error("failed to send job outcome (slow path)", zap.Int64("job", int64(job)), zap.Error(err))
-			} else {
-				logger.Info("job outcome sent (slow path)", zap.Int64("job", int64(job)), zap.String("outcome", outcome))
-			}
+			pu.finish(completion, "after WARC upload")
 			delete(pu.RecordsByJob, job)
-			delete(pu.OutcomeByJob, job)
+			delete(pu.CompletionByJob, job)
 		} else {
 			// job 还有未上传完成的 records，在其它 warcs 中
 			// 移除已上传的 records，保留未上传的 records
@@ -312,13 +320,29 @@ func (pu *PendingUploads) Metrics() map[string]int {
 	pu.mu.Lock()
 	defer pu.mu.Unlock()
 	metrics := make(map[string]int)
-	for _, outcome := range pu.OutcomeByJob {
-		metrics[outcome]++
+	for _, completion := range pu.CompletionByJob {
+		metrics[string(completion.outcome.Kind)]++
 	}
 	return metrics
 }
 
-func UploadWARC(filepath, ARCHIVIST string) error {
+func (pu *PendingUploads) finish(completion jobCompletion, phase string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var err error
+	if completion.failure != nil {
+		err = completion.job.Fail(ctx, *completion.failure)
+	} else {
+		err = completion.job.Complete(ctx, completion.outcome)
+	}
+	if err != nil {
+		logger.Error("failed to finalize HQ job", zap.Error(err), zap.Int64("job", completion.job.JobID), zap.String("phase", phase))
+		return
+	}
+	logger.Info("HQ job finalized", zap.Int64("job", completion.job.JobID), zap.String("outcome", string(completion.outcome.Kind)), zap.String("phase", phase))
+}
+
+func UploadWARC(filepath, userID string) error {
 	baseURL, _ := url.Parse("https://tus.saveweb.org/files")
 	cl := tusgo.NewClient(http.DefaultClient, baseURL)
 
@@ -330,8 +354,8 @@ func UploadWARC(filepath, ARCHIVIST string) error {
 
 	metadata := make(map[string]string)
 	metadata["filename"] = path.Base(f.Name())
-	metadata["project"] = PROJECT
-	metadata["archivist"] = ARCHIVIST
+	metadata["project"] = HQProject
+	metadata["archivist"] = userID
 
 	u := createUploadFromFile(f, cl, metadata)
 

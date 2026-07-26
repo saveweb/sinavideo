@@ -21,7 +21,7 @@ var exts = []string{"mp4", "flv", "hlv"}
 // CDN 入口（cdn.sinacloud.net）已注释关闭以节省带宽；必要时可取消注释。
 var sourceServers = []string{
 	// sina_api.md 推荐的源站，当前最大的活桶（5.27 亿对象）
-	"http://s3.ivideo.sina.com.cn/%s.%s",
+	"http://s3.ivideo.sina.com.cn/%s.%s", // http://sinacloud.net/s3.ivideo.sina.com.cn/
 	// 直连存储桶
 	"http://sinacloud.net/edge.v.iask.com/%s.%s",
 	"http://sinacloud.net/edge.ivideo.sina.com.cn/%s.%s",
@@ -97,7 +97,10 @@ func dedupeByETag(cands []Candidate) []Candidate {
 
 func download(url string) (recordsEvents []warc.RecordEvent, err error) {
 	log.Println("download", url)
-	req, _ := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	feedbackCh := make(chan warc.FeedbackEvent, 1)
 	reqCtx := req.Context()

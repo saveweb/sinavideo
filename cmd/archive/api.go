@@ -93,6 +93,17 @@ type IpadVIDResp struct {
 	IpadVID json.RawMessage `json:"ipad_vid"`
 }
 
+type WAPVideoInfoResp struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
+}
+
+type WAPVideoInfo struct {
+	MP4VID string `json:"mp4vid"`
+	Image  string `json:"image"`
+}
+
 // getIpadVID 通过 vid 查询对应的 ipad_vid（低清整段 MP4 的 ID）。
 // 返回的 ipadVID 在「该视频没有转码低清版（ipad_vid 为 false）」时返回空字符串与 nil error。
 // 视频时长 >6min 且被分段时，主 VID 拿不到原档，此时 ipad_vid 对应的低清 MP4 是 fallback 来源。
@@ -134,6 +145,49 @@ func getIpadVID(vid string) (ipadVID string, recordsEvents []warc.RecordEvent, e
 		return "", recordsEvents, fmt.Errorf("ipad_vid not a string: %s", string(trimmed))
 	}
 	return s, recordsEvents, nil
+}
+
+func parseWAPVideoInfo(raw []byte) (WAPVideoInfo, error) {
+	var resp WAPVideoInfoResp
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return WAPVideoInfo{}, errors.Join(err, fmt.Errorf("unmarshal WAP video info resp: %s", string(raw)))
+	}
+	if resp.Code != 1 {
+		return WAPVideoInfo{}, fmt.Errorf("WAP video info error, expected code 1, got %d, message: %s", resp.Code, resp.Message)
+	}
+
+	var info WAPVideoInfo
+	if err := json.Unmarshal(resp.Data, &info); err != nil {
+		return WAPVideoInfo{}, errors.Join(err, fmt.Errorf("unmarshal WAP video info data: %s", string(resp.Data)))
+	}
+	return info, nil
+}
+
+// getWAPVideoInfo queries the legacy WAP metadata endpoint. Some deleted videos
+// expose a playable MP4 and thumbnail only here even when the play API fails.
+func getWAPVideoInfo(vid string) (info WAPVideoInfo, recordsEvents []warc.RecordEvent, err error) {
+	url := "https://interface.sina.cn/video/wap/videoinfo.d.json?vid=" + vid
+	log.Println("getWAPVideoInfo", url)
+	req, _ := http.NewRequest("GET", url, nil)
+
+	feedbackCh := make(chan warc.FeedbackEvent, 1)
+	reqCtx := warc.WithFeedbackChannel(req.Context(), feedbackCh)
+
+	r, err := client.Do(req.WithContext(reqCtx))
+	if err != nil {
+		return WAPVideoInfo{}, recordsEvents, err
+	}
+	defer func() {
+		recordsEvents = <-feedbackCh
+	}()
+	defer r.Body.Close()
+
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return WAPVideoInfo{}, recordsEvents, err
+	}
+	info, err = parseWAPVideoInfo(raw)
+	return info, recordsEvents, err
 }
 
 func getPlayInfo(videoID string) (playdata *PlayData, rawResp json.RawMessage, recordsEvents []warc.RecordEvent, err error) {

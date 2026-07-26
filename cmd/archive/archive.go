@@ -14,7 +14,7 @@ type FileRef struct {
 	Size     int64  `json:"size"`
 	Filename string `json:"filename"`
 	// Source 标记该文件的来源："main" 为主档高清（vid/file_id），
-	// "ipad" 为 ipad_vid 低清整段 MP4（来自 video_ids.php）。
+	// "ipad" 和 "wap" 为对应 API 发现的低清整段 MP4。
 	Source string `json:"source"`
 }
 
@@ -27,7 +27,7 @@ type Meta struct {
 	Files      []FileRef `json:"files"`
 }
 
-// taggedCandidate 给候选下载项挂上来源标记（main / ipad）与对应的 id，
+// taggedCandidate 给候选下载项挂上来源标记（main / ipad / wap）与对应的 id，
 // 便于下载成功后回填 meta.Files。
 type taggedCandidate struct {
 	Candidate
@@ -66,6 +66,16 @@ func archive(vid string) (allWarcRecEvents []warc.RecordEvent, err error) {
 		meta.DurationMS = d
 	}
 
+	var imageURLs []string
+	seenImageURLs := map[string]bool{}
+	addImageURL := func(u string) {
+		if u != "" && !seenImageURLs[u] {
+			seenImageURLs[u] = true
+			imageURLs = append(imageURLs, u)
+		}
+	}
+	addImageURL(info.Image)
+
 	// 收集所有要探测的 id：主 vid + play API 返回的分段 file_id
 	known := map[string]bool{vid: true}
 	for _, f := range info.Videos {
@@ -97,6 +107,35 @@ func archive(vid string) (allWarcRecEvents []warc.RecordEvent, err error) {
 			for _, c := range cs {
 				cands = append(cands, taggedCandidate{Candidate: c, Source: "ipad", ID: ipadVID})
 			}
+			known[ipadVID] = true
+		}
+	}
+
+	// 失效视频的 WAP 元数据有时仍保留 mp4vid，即使 video_ids.php 返回
+	// ipad_vid=false。该 ID 对应 s3.ivideo.sina.com.cn 上的整段 MP4。
+	if wapInfo, recs, wapErr := getWAPVideoInfo(vid); wapErr != nil {
+		allWarcRecEvents = append(allWarcRecEvents, recs...)
+		log.Printf("  WAP video info lookup failed: %v", wapErr)
+	} else {
+		allWarcRecEvents = append(allWarcRecEvents, recs...)
+		mp4VID := wapInfo.MP4VID
+		if mp4VID != "" && !known[mp4VID] {
+			cs, recs := probeCandidates(mp4VID, []string{"mp4"})
+			allWarcRecEvents = append(allWarcRecEvents, recs...)
+			for _, c := range cs {
+				cands = append(cands, taggedCandidate{Candidate: c, Source: "wap", ID: mp4VID})
+			}
+			known[mp4VID] = true
+		}
+		addImageURL(wapInfo.Image)
+	}
+
+	for _, imageURL := range imageURLs {
+		log.Printf("  downloading referenced image %s", imageURL)
+		recs, imageErr := download(imageURL)
+		allWarcRecEvents = append(allWarcRecEvents, recs...)
+		if imageErr != nil {
+			log.Printf("  referenced image download failed: %v", imageErr)
 		}
 	}
 
@@ -139,4 +178,3 @@ func untag(in []taggedCandidate) []Candidate {
 	}
 	return out
 }
-

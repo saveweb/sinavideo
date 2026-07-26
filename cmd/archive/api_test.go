@@ -22,9 +22,50 @@ func TestGetPlayInfo(t *testing.T) {
 			t.Errorf("unmarshal play data: %v", err)
 			return
 		}
+		if data.Image == "" {
+			t.Fatalf("play image was not parsed: %#v", data)
+		}
 		t.Logf("play info: %v", data)
 	default:
 		t.Errorf("unexpected code: %d, message: %s", p.Code, p.Message)
 	}
 
+}
+
+func TestParseWAPVideoInfo(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want WAPVideoInfo
+	}{
+		{
+			name: "deleted play metadata retains MP4",
+			raw:  `{"code":1,"message":"ok","data":{"title":"Under The Bridge2 02","video_id":60233854,"mp4vid":"60234054","image":"https://p3.ivideo.sina.com.cn/video/239/547/919/239547919.jpg"}}`,
+			want: WAPVideoInfo{MP4VID: "60234054", Image: "https://p3.ivideo.sina.com.cn/video/239/547/919/239547919.jpg"},
+		},
+		{
+			name: "metadata only",
+			raw:  `{"code":1,"message":"ok","data":{"tjtovideo":"http://count.video.sina.com.cn/videoView?video_id=14926796&vid=14926796"}}`,
+			want: WAPVideoInfo{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseWAPVideoInfo([]byte(tt.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseWAPVideoInfo() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseWAPVideoInfoError(t *testing.T) {
+	_, err := parseWAPVideoInfo([]byte(`{"code":0,"message":"not found","data":[]}`))
+	if err == nil {
+		t.Fatal("parseWAPVideoInfo() returned nil error for code 0")
+	}
 }

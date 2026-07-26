@@ -3,9 +3,10 @@ module sinacloud
 go 1.26.4
 
 require (
-	github.com/saveweb/bit_client v0.0.0-20260621014958-fa6168a2d787
-	github.com/saveweb/fhttp v0.0.0-20260618035705-22ac0b47063a
-	github.com/saveweb/gowarc v0.0.0-20260622225417-457ae1c58bf3
+	github.com/bdragon300/tusgo v0.2.0
+	github.com/saveweb/fhttp v0.0.0-20260618035915-79e628d2998e
+	github.com/saveweb/gowarc v0.0.0-20260711230525-6cc06bad7a09
+	github.com/saveweb/hq v0.0.0-20260725214226-b76017073bc4
 	go.uber.org/zap v1.28.0
 )
 
@@ -13,12 +14,11 @@ require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/bdandy/go-socks4 v1.2.3 // indirect
-	github.com/bdragon300/tusgo v0.2.0 // indirect
 	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/gammazero/deque v1.0.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/klauspost/compress v1.19.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/maypok86/otter v1.2.4 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
@@ -33,9 +33,8 @@ require (
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 )

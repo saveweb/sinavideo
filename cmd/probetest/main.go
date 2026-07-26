@@ -113,12 +113,16 @@ func archiveDryRun(vid string, c *http.Client) {
 		var play struct {
 			Code int `json:"code"`
 			Data struct {
+				Image  string `json:"image"`
 				Videos []struct {
 					FileID string `json:"file_id"`
 				} `json:"videos"`
 			} `json:"data"`
 		}
 		if json.Unmarshal([]byte(pbody), &play) == nil && play.Code == 1 {
+			if play.Data.Image != "" {
+				fmt.Printf("  play image = %s (存档器会下载)\n", play.Data.Image)
+			}
 			for _, v := range play.Data.Videos {
 				if v.FileID != "" {
 					fileids = append(fileids, v.FileID)
@@ -174,6 +178,35 @@ func archiveDryRun(vid string, c *http.Client) {
 		} else {
 			fmt.Printf("  ipad_vid %s 已在主档 ids 中，跳过(避免重复)\n", ipadVID)
 		}
+	}
+
+	// WAP mp4vid：play API 已失效且 ipad_vid=false 时仍可能存在。
+	wbody := curl("https://interface.sina.cn/video/wap/videoinfo.d.json?vid="+vid, c)
+	mp4VID := ""
+	var wapResp struct {
+		Code int `json:"code"`
+		Data struct {
+			MP4VID string `json:"mp4vid"`
+			Image  string `json:"image"`
+		} `json:"data"`
+	}
+	if json.Unmarshal([]byte(wbody), &wapResp) == nil && wapResp.Code == 1 {
+		mp4VID = wapResp.Data.MP4VID
+	}
+	if mp4VID == "" {
+		fmt.Printf("  WAP mp4vid 为空 (跳过)\n")
+	} else {
+		fmt.Printf("  WAP mp4vid = %s\n", mp4VID)
+		if mp4VID != vid && mp4VID != ipadVID && !contains(fileids, mp4VID) {
+			cs := probeCandidates(mp4VID, []string{"mp4"}, c)
+			fmt.Printf("  WAP MP4 探测命中: %d 个候选\n", len(cs))
+			allCands = append(allCands, cs...)
+		} else {
+			fmt.Printf("  WAP mp4vid %s 已探测，跳过(避免重复)\n", mp4VID)
+		}
+	}
+	if wapResp.Data.Image != "" {
+		fmt.Printf("  WAP image = %s (存档器会下载)\n", wapResp.Data.Image)
 	}
 
 	// ETag 去重
