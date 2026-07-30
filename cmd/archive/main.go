@@ -150,6 +150,10 @@ func main() {
 			})
 			continue
 		}
+		if err := os.Remove(warcPath); err != nil {
+			logger.Error("failed to remove uploaded job WARC", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath))
+		}
+
 		outcome := protocol.Outcome{Kind: protocol.OutcomeSuccess, Meta: protocol.Attrs{"vid": vid}}
 		if err := completeJob(job, outcome, artifactReceipt(receipt)); err != nil {
 			if errors.Is(err, worker.ErrLeaseLost) {
