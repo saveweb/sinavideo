@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -39,12 +40,15 @@ type Candidate struct {
 
 // probeCandidates 对 id 在「所有源 × 给定扩展名」上发 HEAD，返回所有 200 命中的候选。
 // 故意探测全部源而非命中即停：三个源覆盖范围是部分重叠的并集，某个源 404 的文件可能在另一源上存在。
-func probeCandidates(id string, extList []string) (cands []Candidate, allRecEvents []warc.RecordEvent) {
+func probeCandidates(ctx context.Context, id string, extList []string) (cands []Candidate, allRecEvents []warc.RecordEvent, err error) {
 	for _, srv := range sourceServers {
 		for _, e := range extList {
+			if err := ctx.Err(); err != nil {
+				return cands, allRecEvents, context.Cause(ctx)
+			}
 			u := fmt.Sprintf(srv, id, e)
 			log.Println("probe", u)
-			req, err := http.NewRequest("HEAD", u, nil)
+			req, err := http.NewRequestWithContext(ctx, "HEAD", u, nil)
 			if err != nil {
 				continue
 			}
@@ -54,6 +58,9 @@ func probeCandidates(id string, extList []string) (cands []Candidate, allRecEven
 
 			r, err := client.Do(req.WithContext(reqCtx))
 			if err != nil {
+				if ctx.Err() != nil {
+					return cands, allRecEvents, context.Cause(ctx)
+				}
 				continue
 			}
 			r.Body.Close()
@@ -70,7 +77,7 @@ func probeCandidates(id string, extList []string) (cands []Candidate, allRecEven
 			}
 		}
 	}
-	return cands, allRecEvents
+	return cands, allRecEvents, nil
 }
 
 // dedupeByETag 把指向同一内容（ETag 相同）的候选合并为一次下载。
@@ -95,9 +102,9 @@ func dedupeByETag(cands []Candidate) []Candidate {
 	return out
 }
 
-func download(url string) (recordsEvents []warc.RecordEvent, err error) {
+func download(ctx context.Context, url string) (recordsEvents []warc.RecordEvent, err error) {
 	log.Println("download", url)
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +115,9 @@ func download(url string) (recordsEvents []warc.RecordEvent, err error) {
 
 	r, err := client.Do(req.WithContext(reqCtx))
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, context.Cause(ctx)
+		}
 		return nil, err
 	}
 	defer func() {

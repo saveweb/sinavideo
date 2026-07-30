@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -76,6 +78,32 @@ func TestJobWARCWriterProducesExactlyOneFile(t *testing.T) {
 	}
 }
 
+func TestArchiveHonorsCanceledContext(t *testing.T) {
+	outputDirectory := t.TempDir()
+	tempDirectory := t.TempDir()
+	feedback := make(chan string, 2)
+	settings := newWARCClientSettings("archive.test", 43, outputDirectory, tempDirectory, feedback)
+
+	warcClient, err := warc.NewWARCWritingHTTPClient(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client = warcClient
+	t.Cleanup(func() {
+		client = nil
+		if err := warcClient.Close(); err != nil {
+			t.Error(err)
+		}
+		close(feedback)
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := archive(ctx, "60233854"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("archive() error = %v, want context.Canceled", err)
+	}
+}
+
 func TestArtifactReceipt(t *testing.T) {
 	want := protocol.ArtifactReceipt{
 		ID:         "receipt-1",
@@ -106,7 +134,7 @@ func TestLiveArchiveAndCannerUpload(t *testing.T) {
 	}
 	logger = zap.NewNop()
 
-	warcPath, archiveErr, err := archiveJobTo(9000001, vid, "test-archivist", "archive.test", t.TempDir(), t.TempDir())
+	warcPath, archiveErr, err := archiveJobTo(t.Context(), 9000001, vid, "test-archivist", "archive.test", t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

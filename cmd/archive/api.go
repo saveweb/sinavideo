@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,10 +42,10 @@ type VideoFile struct {
 }
 
 // getvideoidbyvid
-func getVideoID(vid string) (videoid string, recordsEvents []warc.RecordEvent, err error) {
+func getVideoID(ctx context.Context, vid string) (videoid string, recordsEvents []warc.RecordEvent, err error) {
 	url := "https://s.video.sina.com.cn/video/getvideoidbyvid?vid=" + vid
 	log.Println("getVideoID", url)
-	req, _ := http.NewRequest("GET", url, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 
 	feedbackCh := make(chan warc.FeedbackEvent, 1)
 	reqCtx := req.Context()
@@ -52,6 +53,9 @@ func getVideoID(vid string) (videoid string, recordsEvents []warc.RecordEvent, e
 
 	r, err := client.Do(req.WithContext(reqCtx))
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", recordsEvents, context.Cause(ctx)
+		}
 		return "", recordsEvents, err
 	}
 	defer func() {
@@ -107,10 +111,10 @@ type WAPVideoInfo struct {
 // getIpadVID 通过 vid 查询对应的 ipad_vid（低清整段 MP4 的 ID）。
 // 返回的 ipadVID 在「该视频没有转码低清版（ipad_vid 为 false）」时返回空字符串与 nil error。
 // 视频时长 >6min 且被分段时，主 VID 拿不到原档，此时 ipad_vid 对应的低清 MP4 是 fallback 来源。
-func getIpadVID(vid string) (ipadVID string, recordsEvents []warc.RecordEvent, err error) {
+func getIpadVID(ctx context.Context, vid string) (ipadVID string, recordsEvents []warc.RecordEvent, err error) {
 	url := "http://video.sina.com.cn/interface/video_ids/video_ids.php?v=" + vid
 	log.Println("getIpadVID", url)
-	req, _ := http.NewRequest("GET", url, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 
 	feedbackCh := make(chan warc.FeedbackEvent, 1)
 	reqCtx := req.Context()
@@ -118,6 +122,9 @@ func getIpadVID(vid string) (ipadVID string, recordsEvents []warc.RecordEvent, e
 
 	r, err := client.Do(req.WithContext(reqCtx))
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", recordsEvents, context.Cause(ctx)
+		}
 		return "", recordsEvents, err
 	}
 	defer func() {
@@ -165,16 +172,19 @@ func parseWAPVideoInfo(raw []byte) (WAPVideoInfo, error) {
 
 // getWAPVideoInfo queries the legacy WAP metadata endpoint. Some deleted videos
 // expose a playable MP4 and thumbnail only here even when the play API fails.
-func getWAPVideoInfo(vid string) (info WAPVideoInfo, recordsEvents []warc.RecordEvent, err error) {
+func getWAPVideoInfo(ctx context.Context, vid string) (info WAPVideoInfo, recordsEvents []warc.RecordEvent, err error) {
 	url := "https://interface.sina.cn/video/wap/videoinfo.d.json?vid=" + vid
 	log.Println("getWAPVideoInfo", url)
-	req, _ := http.NewRequest("GET", url, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 
 	feedbackCh := make(chan warc.FeedbackEvent, 1)
 	reqCtx := warc.WithFeedbackChannel(req.Context(), feedbackCh)
 
 	r, err := client.Do(req.WithContext(reqCtx))
 	if err != nil {
+		if ctx.Err() != nil {
+			return WAPVideoInfo{}, recordsEvents, context.Cause(ctx)
+		}
 		return WAPVideoInfo{}, recordsEvents, err
 	}
 	defer func() {
@@ -190,11 +200,11 @@ func getWAPVideoInfo(vid string) (info WAPVideoInfo, recordsEvents []warc.Record
 	return info, recordsEvents, err
 }
 
-func getPlayInfo(videoID string) (playdata *PlayData, rawResp json.RawMessage, recordsEvents []warc.RecordEvent, err error) {
+func getPlayInfo(ctx context.Context, videoID string) (playdata *PlayData, rawResp json.RawMessage, recordsEvents []warc.RecordEvent, err error) {
 	url := "http://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id=" + videoID
 	log.Println("getPlayInfo", url)
 
-	req, _ := http.NewRequest("GET", url, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 
 	feedbackCh := make(chan warc.FeedbackEvent, 1)
 	reqCtx := req.Context()
@@ -202,6 +212,9 @@ func getPlayInfo(videoID string) (playdata *PlayData, rawResp json.RawMessage, r
 
 	r, err := client.Do(req.WithContext(reqCtx))
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, recordsEvents, context.Cause(ctx)
+		}
 		return nil, nil, recordsEvents, err
 	}
 	defer func() {

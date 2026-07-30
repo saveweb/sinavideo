@@ -122,7 +122,7 @@ func main() {
 			continue
 		}
 
-		warcPath, archiveErr, err := archiveJob(job.JobID, vid, userID, hostname)
+		warcPath, archiveErr, err := archiveJob(job.Context(), job.JobID, vid, userID, hostname)
 		if err != nil {
 			logger.Error("failed to create job WARC", zap.Error(err), zap.Int64("job", job.JobID), zap.String("vid", vid))
 			finishJobFailure(job, worker.Failure{
@@ -152,6 +152,10 @@ func main() {
 		}
 		outcome := protocol.Outcome{Kind: protocol.OutcomeSuccess, Meta: protocol.Attrs{"vid": vid}}
 		if err := completeJob(job, outcome, artifactReceipt(receipt)); err != nil {
+			if errors.Is(err, worker.ErrLeaseLost) {
+				logger.Error("HQ job lease was lost before completion", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
+				continue
+			}
 			logger.Fatal("failed to complete HQ job", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
 		}
 		logger.Info("completed HQ job", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
@@ -200,11 +204,11 @@ func newWARCClientSettings(hostname string, jobID int64, outputDirectory, tempDi
 
 // archiveJob owns the complete lifecycle of exactly one WARC writer. Disabling
 // size rotation ensures no job can be split across multiple artifact files.
-func archiveJob(jobID int64, vid, userID, hostname string) (warcPath string, archiveErr, err error) {
-	return archiveJobTo(jobID, vid, userID, hostname, warcOutputDirectory, warcTempDirectory)
+func archiveJob(ctx context.Context, jobID int64, vid, userID, hostname string) (warcPath string, archiveErr, err error) {
+	return archiveJobTo(ctx, jobID, vid, userID, hostname, warcOutputDirectory, warcTempDirectory)
 }
 
-func archiveJobTo(jobID int64, vid, userID, hostname, outputDirectory, tempDirectory string) (warcPath string, archiveErr, err error) {
+func archiveJobTo(ctx context.Context, jobID int64, vid, userID, hostname, outputDirectory, tempDirectory string) (warcPath string, archiveErr, err error) {
 	filenameFeedback := make(chan string, 2)
 	settings := newWARCClientSettings(hostname, jobID, outputDirectory, tempDirectory, filenameFeedback)
 
@@ -215,7 +219,7 @@ func archiveJobTo(jobID int64, vid, userID, hostname, outputDirectory, tempDirec
 	client = warcClient
 	defer func() { client = nil }()
 
-	records, archiveErr := archive(vid)
+	records, archiveErr := archive(ctx, vid)
 	outcome := string(protocol.OutcomeSuccess)
 	if archiveErr != nil {
 		outcome = "failed"
@@ -283,9 +287,17 @@ func completeJob(job *worker.Job, outcome protocol.Outcome, receipt protocol.Art
 }
 
 func finishJobFailure(job *worker.Job, failure worker.Failure) {
+	if cause := context.Cause(job.Context()); cause != nil {
+		logger.Error("cannot fail HQ job after losing its lease", zap.Error(cause), zap.Int64("job", job.JobID), zap.String("code", failure.Error.Code))
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := job.Fail(ctx, failure); err != nil {
+		if errors.Is(err, worker.ErrLeaseLost) {
+			logger.Error("HQ job lease was lost before failure could be reported", zap.Error(err), zap.Int64("job", job.JobID), zap.String("code", failure.Error.Code))
+			return
+		}
 		logger.Fatal("failed to fail HQ job", zap.Error(err), zap.Int64("job", job.JobID), zap.String("code", failure.Error.Code))
 	}
 }
