@@ -283,13 +283,13 @@ cid, aid, page, title, subtitle, mid, author, cover, type, vid, duration
 
 ## 六、批量搜索工具
 
-- **存档工具**：`cmd/archive/` — 从 SavewebHQ 的 `sinavideo` 项目领取 job（`value` 为 vid），自动查询 API、探测源站、下载视频和元数据，全部写入 WARC 后经 tus 上传。HQ 地址使用 SDK 默认的 `https://hq.saveweb.org/`；运行时只需设置 `HQ_MACHINE_TOKEN`，贡献者身份由 machine token 自动解析。
+- **存档工具**：`cmd/archive/` — 从 SavewebHQ 的 `sinavideo` 项目领取 job（`value` 为 vid），自动查询 API、探测源站、下载视频和元数据。每个 job 独立生成一个 WARC，关闭后上传到 canner，并将 canner receipt 提交给 HQ 后才完成 job。HQ 地址使用 SDK 默认的 `https://hq.saveweb.org/`；运行时需设置 `HQ_MACHINE_TOKEN` 与 canner 根地址 `CANNER_URL`，贡献者身份由 machine token 自动解析。
   - **爬取策略（全源探测 + ETag 去重）**：三个源站覆盖范围是部分重叠的并集（2.4），因此对每个 id 在「**所有源 × 全扩展名**」上发 HEAD，收集全部 200 命中的候选；再用 **ETag 去重**——指向同一内容（ETag 相同）的多条 URL 只下载一次。这样在最大化召回率的同时避免重复字节/请求。
   - **id 集合**：主 vid + play API 返回的分段 file_id（主档高清，ext=mp4/flv/hlv）；再查 `video_ids.php` 补 ipad_vid，并查 WAP API 补 mp4vid（低清整段，ext=mp4）。主档与低清版本的 ETag 必然不同，不会被互相去重，两者都保留。
   - **探测顺序**：先打 `getvideoidbyvid` 拿 video_id，再打 play API 拿标题/file_id 列表，同时补查 ipad_vid 和 WAP mp4vid，最后全源探测候选并按 ETag 去重后下载。
   - 响应体由 WARC 客户端在底层拦截落盘，业务层只需读完 body 触发记录完成。
 - **源站覆盖率复测**：`scripts/probe_sources.sh` + `scripts/analyze_probe.py` — 分层抽样 vid，对三源全 ext 探测，报告命中率/独占差异/ETag 一致性。定期复测三源存活与覆盖率变化。
-- **单 vid 探测诊断**：`cmd/probetest/` — 不依赖 WARC/tracker/tus 的 dry-run 工具，镜像 `cmd/archive` 的「全源全 ext 探测 → ETag 去重」逻辑，打印最终会下载哪些 URL、各自大小/ETag、去重节省了多少次，**不真正下载 body**。用于排查某个 vid 的命中情况和去重是否如预期。
+- **单 vid 探测诊断**：`cmd/probetest/` — 不依赖 WARC、tracker 或 canner 的 dry-run 工具，镜像 `cmd/archive` 的「全源全 ext 探测 → ETag 去重」逻辑，打印最终会下载哪些 URL、各自大小/ETag、去重节省了多少次，**不真正下载 body**。用于排查某个 vid 的命中情况和去重是否如预期。
   - 用法：`go run ./cmd/probetest/ <vid> [vid ...]`
   - 覆盖 case：主档+ipad 都在（ipad∈fileids）、仅 ipad 命中（主档全 404）、play API 失效兜底、ipad==false 跳过等。
 - **IDM 下载器**：
