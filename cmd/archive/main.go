@@ -114,13 +114,12 @@ func main() {
 
 	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("hostname", HOSTNAME)))
 
-	hqURL := os.Getenv("HQ_TRACKER_URL")
 	hqMachineToken := os.Getenv("HQ_MACHINE_TOKEN")
-	if hqURL == "" || hqMachineToken == "" {
-		logger.Fatal("HQ_TRACKER_URL and HQ_MACHINE_TOKEN must be set")
+	if hqMachineToken == "" {
+		logger.Fatal("HQ_MACHINE_TOKEN must be set")
 	}
 	hqConfig := worker.Config{
-		TrackerURL: hqURL, MachineToken: hqMachineToken,
+		MachineToken:  hqMachineToken,
 		ClientVersion: HQClientVersion,
 	}
 	ctx := context.Background()

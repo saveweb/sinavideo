@@ -6,7 +6,7 @@ require (
 	github.com/bdragon300/tusgo v0.2.0
 	github.com/saveweb/fhttp v0.0.0-20260618035915-79e628d2998e
 	github.com/saveweb/gowarc v0.0.0-20260711230525-6cc06bad7a09
-	github.com/saveweb/hq v0.0.0-20260725214226-b76017073bc4
+	github.com/saveweb/hq v0.0.0-20260730031644-3d8160486855
 	go.uber.org/zap v1.28.0
 )
 

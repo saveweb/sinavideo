@@ -52,8 +52,8 @@ github.com/saveweb/hq v0.0.0-20260722035408-a80d1a67d737 h1:8j22ihUrEE+iGTG5jTVd
 github.com/saveweb/hq v0.0.0-20260722035408-a80d1a67d737/go.mod h1:8m3SVqJjZUURmN/3RZ2zEwxx2bJcEs0atNuBSI4uFY4=
 github.com/saveweb/hq v0.0.0-20260723045106-676fe70bd671 h1:SYnxFaT+Nmu+uTa1eNnO7Cz2j56+5TI2b3fGQTSyDhI=
 github.com/saveweb/hq v0.0.0-20260723045106-676fe70bd671/go.mod h1:8m3SVqJjZUURmN/3RZ2zEwxx2bJcEs0atNuBSI4uFY4=
-github.com/saveweb/hq v0.0.0-20260725214226-b76017073bc4 h1:pqZZEts0S1iKqZPBXrcCIk/BhsthSovzb0wzgNxVb4E=
-github.com/saveweb/hq v0.0.0-20260725214226-b76017073bc4/go.mod h1:8m3SVqJjZUURmN/3RZ2zEwxx2bJcEs0atNuBSI4uFY4=
+github.com/saveweb/hq v0.0.0-20260730031644-3d8160486855 h1:WKboCTyTsTc70x2FmXr6h0Wyrt4BeaBQxd5w/1fTSoE=
+github.com/saveweb/hq v0.0.0-20260730031644-3d8160486855/go.mod h1:8m3SVqJjZUURmN/3RZ2zEwxx2bJcEs0atNuBSI4uFY4=
 github.com/saveweb/quic-go-utls v0.0.0-20260618035708-72125476efcb h1:HNA6dyE9Je3fu676fPmtRKeVk3wijU7W7ea9hibNwaE=
 github.com/saveweb/quic-go-utls v0.0.0-20260618035708-72125476efcb/go.mod h1:G+re4mfampNEwyqJS3jFbey2UFJOh0S5GdSxU0VPU0A=
 github.com/saveweb/tls-client v0.0.0-20260618035716-2185ff873265 h1:qgOr37yYQO9dq+UnqeMJW8l60gWxbWi4kvNrsbxuMEk=
