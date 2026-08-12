@@ -75,8 +75,8 @@ func main() {
 
 	hqMachineToken := os.Getenv("HQ_MACHINE_TOKEN")
 	cannerURL := os.Getenv("CANNER_URL")
-	if hqMachineToken == "" || cannerURL == "" {
-		logger.Fatal("HQ_MACHINE_TOKEN and CANNER_URL must be set")
+	if hqMachineToken == "" {
+		logger.Fatal("HQ_MACHINE_TOKEN must be set")
 	}
 
 	canner, err := cannerclient.New(cannerURL)

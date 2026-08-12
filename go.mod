@@ -3,7 +3,7 @@ module sinacloud
 go 1.26.4
 
 require (
-	github.com/saveweb/canner v0.0.0-20260724035524-086354c4f6b5
+	github.com/saveweb/canner v0.0.0-20260809150359-74101692b361
 	github.com/saveweb/fhttp v0.0.0-20260618035915-79e628d2998e
 	github.com/saveweb/gowarc v0.0.0-20260726092039-f364bd432f43
 	github.com/saveweb/hq v0.0.0-20260730031644-3d8160486855
