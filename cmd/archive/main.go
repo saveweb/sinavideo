@@ -28,7 +28,7 @@ var flagMaxJobs int
 
 func init() {
 	flag.StringVar(&flagDebufOutput, "o", "", "debug output directory (for dev only)")
-	flag.IntVar(&flagMaxJobs, "max-jobs", 0, "maximum jobs to claim before stopping (0 means unlimited)")
+	flag.IntVar(&flagMaxJobs, "max-jobs", 0, "maximum distinct jobs to process before stopping (0 means unlimited)")
 }
 
 var client *warc.CustomHTTPClient
@@ -112,14 +112,14 @@ func main() {
 	defer tracker.Close()
 	logger.Info("opened HQ project queue", zap.String("worker_id", tracker.WorkerID()), zap.String("project", HQProject))
 
-	claimedJobs := 0
+	claimedJobs := make(map[int64]struct{})
 	for {
 		if shutdownCtx.Err() != nil {
 			logger.Info("stopped before claiming another HQ job")
 			return
 		}
-		if flagMaxJobs > 0 && claimedJobs >= flagMaxJobs {
-			logger.Info("reached job limit", zap.Int("claimed_jobs", claimedJobs))
+		if flagMaxJobs > 0 && len(claimedJobs) >= flagMaxJobs {
+			logger.Info("reached job limit", zap.Int("claimed_jobs", len(claimedJobs)))
 			return
 		}
 		batch, err := tracker.Claim(shutdownCtx, worker.ClaimOptions{MaxJobs: 1, AcceptTypes: []string{protocol.JobTypeSeed}})
@@ -135,7 +135,7 @@ func main() {
 		}
 
 		job := batch.Jobs[0]
-		claimedJobs++
+		claimedJobs[job.JobID] = struct{}{}
 		vid := job.Spec.Value
 		if !vidPattern.MatchString(vid) {
 			logger.Error("HQ job value is not a vid", zap.Int64("job", job.JobID), zap.String("value", vid))
