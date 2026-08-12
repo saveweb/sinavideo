@@ -134,7 +134,6 @@ func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration)
 	}()
 	defer r.Body.Close()
 	if r.StatusCode != 200 {
-		_, _ = io.Copy(io.Discard, r.Body)
 		return recordsEvents, fmt.Errorf("http %d", r.StatusCode)
 	}
 	// 响应体由 WARC 客户端在底层拦截并写入 WARC 文件，这里只需读完以触发记录完成。
