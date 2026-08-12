@@ -50,8 +50,6 @@ func main() {
 	if flagMaxJobs < 0 {
 		log.Fatal("max-jobs must not be negative")
 	}
-	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -81,6 +79,8 @@ func main() {
 	defer baseLogger.Sync()
 
 	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("hostname", hostname)))
+	shutdownCtx, stopShutdown := gracefulShutdownContext(logger)
+	defer stopShutdown()
 
 	hqMachineToken := os.Getenv("HQ_MACHINE_TOKEN")
 	cannerURL := os.Getenv("CANNER_URL")
@@ -187,6 +187,22 @@ func main() {
 			logger.Fatal("failed to complete HQ job", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
 		}
 		logger.Info("completed HQ job", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
+	}
+}
+
+func gracefulShutdownContext(logger *zap.Logger) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	shutdownSignals := make(chan os.Signal, 1)
+	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-shutdownSignals
+		signal.Stop(shutdownSignals)
+		cancel()
+		logger.Info("shutdown requested; finishing the current HQ job before stopping", zap.String("force_exit", "press Ctrl-C again"))
+	}()
+	return ctx, func() {
+		signal.Stop(shutdownSignals)
+		cancel()
 	}
 }
 
