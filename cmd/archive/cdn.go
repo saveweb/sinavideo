@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	http "github.com/saveweb/fhttp"
 	warc "github.com/saveweb/gowarc"
@@ -14,6 +15,8 @@ import (
 )
 
 var exts = []string{"mp4", "flv", "hlv"}
+
+const downloadTimeout = 30 * time.Minute
 
 // sourceServers 按探测/下载优先级排列。三个入口共享部分数据（同 vid 三源都命中时 ETag 一致），
 // 但各自都有独占文件——批量测试（72 样本 × 3 源 × 3 ext）显示 s3.ivideo / edge.ivideo /
@@ -103,7 +106,13 @@ func dedupeByETag(cands []Candidate) []Candidate {
 }
 
 func download(ctx context.Context, url string) (recordsEvents []warc.RecordEvent, err error) {
+	return downloadWithTimeout(ctx, url, downloadTimeout)
+}
+
+func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration) (recordsEvents []warc.RecordEvent, err error) {
 	log.Println("download", url)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
