@@ -133,13 +133,14 @@ func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration)
 		recordsEvents = <-feedbackCh
 	}()
 	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		_, _ = io.Copy(io.Discard, r.Body)
+		return recordsEvents, fmt.Errorf("http %d", r.StatusCode)
+	}
 	// 响应体由 WARC 客户端在底层拦截并写入 WARC 文件，这里只需读完以触发记录完成。
 	n, err := io.Copy(io.Discard, r.Body)
 	if err != nil {
 		return recordsEvents, err
-	}
-	if r.StatusCode != 200 {
-		return recordsEvents, fmt.Errorf("http %d", r.StatusCode)
 	}
 	logger.Info("download", zap.String("url", url), zap.Int64("size", n))
 	return recordsEvents, nil
