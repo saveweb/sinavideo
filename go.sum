@@ -32,8 +32,8 @@ github.com/saveweb/canner v0.0.0-20260809150359-74101692b361 h1:P8Sa1ceC8G7abYe6
 github.com/saveweb/canner v0.0.0-20260809150359-74101692b361/go.mod h1:t+LoiOY8UyUQyn/O0PEQ5MZ8wOux5pkDhM0+FYSCMTQ=
 github.com/saveweb/fhttp v0.0.0-20260618035915-79e628d2998e h1:Zf5IjpKPNWB7vfduBOhSe/20u6+FbBxRWq5dKID/yrk=
 github.com/saveweb/fhttp v0.0.0-20260618035915-79e628d2998e/go.mod h1:o2MQuRqq/jVu9Hu00Nc6tbn/Y9P8AGstmXhhP9ChSo0=
-github.com/saveweb/gowarc v0.0.0-20260812144626-3dc8cd77a901 h1:khgufn87VAaC/CqsEwTmONfJ5DxLqZV9kSm0K8NjMsE=
-github.com/saveweb/gowarc v0.0.0-20260812144626-3dc8cd77a901/go.mod h1:nlae+ngmJXVGluxFTDS5EoNLP7dTjBcOlUu8h9c7vxY=
+github.com/saveweb/gowarc v0.0.0-20260812150159-6c8a85eee292 h1:UejZ8mZ+nQ3SIvsmoITEd/oU6ReUDw9YLQ6b+Fl8m58=
+github.com/saveweb/gowarc v0.0.0-20260812150159-6c8a85eee292/go.mod h1:nlae+ngmJXVGluxFTDS5EoNLP7dTjBcOlUu8h9c7vxY=
 github.com/saveweb/hq v0.0.0-20260730031644-3d8160486855 h1:WKboCTyTsTc70x2FmXr6h0Wyrt4BeaBQxd5w/1fTSoE=
 github.com/saveweb/hq v0.0.0-20260730031644-3d8160486855/go.mod h1:8m3SVqJjZUURmN/3RZ2zEwxx2bJcEs0atNuBSI4uFY4=
 github.com/saveweb/quic-go-utls v0.0.0-20260618035708-72125476efcb h1:HNA6dyE9Je3fu676fPmtRKeVk3wijU7W7ea9hibNwaE=
