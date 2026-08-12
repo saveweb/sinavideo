@@ -8,9 +8,11 @@ import (
 	"log"
 	"math"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sinacloud/vl"
+	"syscall"
 	"time"
 
 	cannerclient "github.com/saveweb/canner/client"
@@ -43,6 +45,8 @@ var vidPattern = regexp.MustCompile(`^[0-9]+$`)
 
 func main() {
 	flag.Parse()
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -88,14 +92,13 @@ func main() {
 		MachineToken:  hqMachineToken,
 		ClientVersion: HQClientVersion,
 	}
-	ctx := context.Background()
-	userID, err := worker.WhoAmI(ctx, hqConfig)
+	userID, err := worker.WhoAmI(shutdownCtx, hqConfig)
 	if err != nil {
 		logger.Fatal("failed to resolve HQ user", zap.Error(err))
 	}
 	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("user_id", userID), zap.String("hostname", hostname)))
 
-	tracker, err := worker.OpenProjectQueue(ctx, hqConfig, HQProject)
+	tracker, err := worker.OpenProjectQueue(context.Background(), hqConfig, HQProject)
 	if err != nil {
 		logger.Fatal("failed to create tracker", zap.Error(err))
 	}
@@ -103,8 +106,16 @@ func main() {
 	logger.Info("opened HQ project queue", zap.String("worker_id", tracker.WorkerID()), zap.String("project", HQProject))
 
 	for {
-		batch, err := tracker.Claim(ctx, worker.ClaimOptions{MaxJobs: 1, AcceptTypes: []string{protocol.JobTypeSeed}})
+		if shutdownCtx.Err() != nil {
+			logger.Info("stopped before claiming another HQ job")
+			return
+		}
+		batch, err := tracker.Claim(shutdownCtx, worker.ClaimOptions{MaxJobs: 1, AcceptTypes: []string{protocol.JobTypeSeed}})
 		if err != nil {
+			if shutdownCtx.Err() != nil {
+				logger.Info("stopped while waiting for an HQ job")
+				return
+			}
 			logger.Fatal("failed to claim HQ job", zap.Error(err), zap.String("client_version", HQClientVersion))
 		}
 		if len(batch.Jobs) == 0 {
