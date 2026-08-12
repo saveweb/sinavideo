@@ -34,7 +34,7 @@ var logger *zap.Logger
 
 const (
 	HQProject       = "sinavideo"
-	HQClientVersion = "sinavideo/2.5.0"
+	HQClientVersion = "sinavideo/2.4.0"
 
 	userAgent           = "Mozilla/5.0 (compatible; saveweb) sinavideo_archive/020260620"
 	warcOutputDirectory = "warcs"
