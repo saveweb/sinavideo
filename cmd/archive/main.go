@@ -102,6 +102,8 @@ func main() {
 		logger.Fatal("failed to resolve HQ user", zap.Error(err))
 	}
 	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("user_id", userID), zap.String("hostname", hostname)))
+	undoStdLog := zap.RedirectStdLog(logger)
+	defer undoStdLog()
 
 	tracker, err := worker.OpenProjectQueue(context.Background(), hqConfig, HQProject)
 	if err != nil {

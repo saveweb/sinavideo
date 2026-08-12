@@ -2,10 +2,10 @@ package vl
 
 import (
 	"bytes"
-	"context"
 	"fmt"
-	"log"
 	"net/http"
+	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -14,20 +14,19 @@ type VictoriaLogsAsyncWriter struct {
 	url         string
 	client      *http.Client
 	logChan     chan []byte
-	ctx         context.Context
-	cancel      context.CancelFunc
+	done        chan struct{}
+	mu          sync.Mutex
+	closed      bool
 	maxBatch    int
 	flushPeriod time.Duration
 }
 
 func NewVLWriter(vlAddr, query string, maxQueueSize, maxBatch int, flushPeriod time.Duration) *VictoriaLogsAsyncWriter {
-	ctx, cancel := context.WithCancel(context.Background())
 	w := &VictoriaLogsAsyncWriter{
 		url:         fmt.Sprintf("%s/insert/jsonline?%s", vlAddr, query),
 		client:      &http.Client{Timeout: 10 * time.Second},
 		logChan:     make(chan []byte, maxQueueSize),
-		ctx:         ctx,
-		cancel:      cancel,
+		done:        make(chan struct{}),
 		maxBatch:    maxBatch,
 		flushPeriod: flushPeriod,
 	}
@@ -45,17 +44,23 @@ func (w *VictoriaLogsAsyncWriter) Write(p []byte) (n int, err error) {
 	buf := make([]byte, len(p))
 	copy(buf, p)
 
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return len(p), nil
+	}
 	select {
 	case w.logChan <- buf:
 		LogsEnqueued.Add(1)
 	default:
 		LogsDropped.Add(1)
-		log.Println("[VL-Writer-Error] Log queue full, dropping log line. logs metrics:", "enqueued", LogsEnqueued.Load(), "dropped", LogsDropped.Load(), "sent", LogsSent.Load(), "failed", LogsFailed.Load())
+		fmt.Fprintf(os.Stderr, "[VL-Writer-Error] log queue full; enqueued=%d dropped=%d sent=%d failed=%d\n", LogsEnqueued.Load(), LogsDropped.Load(), LogsSent.Load(), LogsFailed.Load())
 	}
 	return len(p), nil
 }
 
 func (w *VictoriaLogsAsyncWriter) worker() {
+	defer close(w.done)
 	ticker := time.NewTicker(w.flushPeriod)
 	defer ticker.Stop()
 
@@ -66,27 +71,30 @@ func (w *VictoriaLogsAsyncWriter) worker() {
 		if batch.Len() == 0 {
 			return
 		}
-		req, err := http.NewRequestWithContext(w.ctx, "POST", w.url, bytes.NewReader(batch.Bytes()))
+		req, err := http.NewRequest("POST", w.url, bytes.NewReader(batch.Bytes()))
 		if err != nil {
-			log.Printf("[VL-Writer-Error] failed to create request: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[VL-Writer-Error] failed to create request: %v\n", err)
+			LogsFailed.Add(int64(count))
+			batch.Reset()
+			count = 0
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := w.client.Do(req)
 		if err != nil {
-			log.Printf("[VL-Writer-Error] failed to send logs: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[VL-Writer-Error] failed to send logs: %v\n", err)
 			LogsFailed.Add(int64(count))
+			batch.Reset()
+			count = 0
 			return
 		}
 		resp.Body.Close()
 
-		if resp.StatusCode >= 400 {
-			log.Printf("[VL-Writer-Error] VictoriaLogs returned status: %d\n", resp.StatusCode)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			fmt.Fprintf(os.Stderr, "[VL-Writer-Error] VictoriaLogs returned status: %d\n", resp.StatusCode)
 			LogsFailed.Add(int64(count))
-		}
-
-		if resp.StatusCode < 200 {
+		} else {
 			LogsSent.Add(int64(count))
 		}
 
@@ -96,10 +104,11 @@ func (w *VictoriaLogsAsyncWriter) worker() {
 
 	for {
 		select {
-		case <-w.ctx.Done():
-			send()
-			return
-		case logLine := <-w.logChan:
+		case logLine, ok := <-w.logChan:
+			if !ok {
+				send()
+				return
+			}
 			batch.Write(logLine)
 			count++
 			if count >= w.maxBatch {
@@ -112,6 +121,11 @@ func (w *VictoriaLogsAsyncWriter) worker() {
 }
 
 func (w *VictoriaLogsAsyncWriter) Close() {
-	w.cancel()
-	time.Sleep(500 * time.Millisecond)
+	w.mu.Lock()
+	if !w.closed {
+		w.closed = true
+		close(w.logChan)
+	}
+	w.mu.Unlock()
+	<-w.done
 }
