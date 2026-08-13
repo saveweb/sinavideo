@@ -1,4 +1,4 @@
-wiki.saveweb.org/sinavideo
+https://wiki.saveweb.org/sinavideo
 
 # 参与存档
 
