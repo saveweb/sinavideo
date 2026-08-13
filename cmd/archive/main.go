@@ -105,7 +105,7 @@ func main() {
 	undoStdLog := zap.RedirectStdLog(logger)
 	defer undoStdLog()
 
-	tracker, err := worker.OpenProjectQueue(context.Background(), hqConfig, HQProject)
+	tracker, err := worker.OpenProjectQueue(shutdownCtx, hqConfig, HQProject)
 	if err != nil {
 		logger.Fatal("failed to create tracker", zap.Error(err))
 	}
@@ -198,7 +198,7 @@ func gracefulShutdownContext(logger *zap.Logger) (context.Context, context.Cance
 		<-shutdownSignals
 		signal.Stop(shutdownSignals)
 		cancel()
-		logger.Info("shutdown requested; finishing the current HQ job before stopping", zap.String("force_exit", "press Ctrl-C again"))
+		logger.Info("shutdown requested; canceling the current HQ job and stopping", zap.String("force_exit", "press Ctrl-C again"))
 	}()
 	return ctx, func() {
 		signal.Stop(shutdownSignals)
