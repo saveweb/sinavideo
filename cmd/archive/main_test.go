@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -204,6 +205,49 @@ func TestRemoveJobWARC(t *testing.T) {
 
 	// Cleanup is idempotent so an already-removed artifact is not an error.
 	removeJobWARC(warcPath, 42)
+}
+
+func TestUploadPercent(t *testing.T) {
+	progress := cannerclient.UploadProgress{BytesDone: 1, BytesTotal: 4}
+	if got := uploadPercent(progress); got != 25 {
+		t.Fatalf("uploadPercent() = %v, want 25", got)
+	}
+	if got := uploadPercent(cannerclient.UploadProgress{}); got != 0 {
+		t.Fatalf("uploadPercent() = %v, want 0", got)
+	}
+}
+
+func TestReportUploadProgressPeriodicallyUntilStopped(t *testing.T) {
+	var latest atomic.Pointer[cannerclient.UploadProgress]
+	progress := &cannerclient.UploadProgress{Phase: cannerclient.ProgressUploading, BytesDone: 25, BytesTotal: 100}
+	latest.Store(progress)
+	done := make(chan struct{})
+	reports := make(chan cannerclient.UploadProgress, 2)
+	stopped := make(chan struct{})
+	go func() {
+		reportUploadProgress(done, &latest, time.Millisecond, func(snapshot cannerclient.UploadProgress) {
+			select {
+			case reports <- snapshot:
+			default:
+			}
+		})
+		close(stopped)
+	}()
+
+	select {
+	case got := <-reports:
+		if got != *progress {
+			t.Fatalf("progress = %+v, want %+v", got, *progress)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for progress report")
+	}
+	close(done)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("progress reporter did not stop")
+	}
 }
 
 func TestLiveArchiveAndCannerUpload(t *testing.T) {

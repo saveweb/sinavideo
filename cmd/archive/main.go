@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"sinacloud/vl"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,6 +43,7 @@ const (
 	userAgent           = "Mozilla/5.0 (compatible; saveweb) sinavideo_archive/020260620"
 	warcOutputDirectory = "warcs"
 	warcTempDirectory   = "temp"
+	uploadLogInterval   = 30 * time.Second
 )
 
 var vidPattern = regexp.MustCompile(`^[0-9]+$`)
@@ -189,7 +192,7 @@ func processJob(job *worker.Job, canner *cannerclient.Client, userID, workerID s
 	}
 
 	logger.Info("uploading job WARC to canner", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath))
-	receipt, err := canner.UploadFile(job.Context(), HQProject, warcPath)
+	receipt, err := uploadJobWARC(job.Context(), canner, warcPath, job.JobID, vid)
 	if err != nil {
 		logger.Error("failed to upload job WARC to canner", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath))
 		return finishJobFailure(job, worker.Failure{
@@ -209,6 +212,56 @@ func processJob(job *worker.Job, canner *cannerclient.Client, userID, workerID s
 	}
 	logger.Info("completed HQ job", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
 	return nil
+}
+
+func uploadJobWARC(ctx context.Context, canner *cannerclient.Client, warcPath string, jobID int64, vid string) (cannerclient.Receipt, error) {
+	var latest atomic.Pointer[cannerclient.UploadProgress]
+	done := make(chan struct{})
+	var reporter sync.WaitGroup
+	reporter.Add(1)
+	go func() {
+		defer reporter.Done()
+		reportUploadProgress(done, &latest, uploadLogInterval, func(progress cannerclient.UploadProgress) {
+			logger.Info("canner upload progress",
+				zap.Int64("job", jobID),
+				zap.String("vid", vid),
+				zap.String("warc", warcPath),
+				zap.String("phase", string(progress.Phase)),
+				zap.Int64("bytes_done", progress.BytesDone),
+				zap.Int64("bytes_total", progress.BytesTotal),
+				zap.Float64("percent", uploadPercent(progress)),
+			)
+		})
+	}()
+
+	receipt, err := canner.UploadFileWithProgress(ctx, HQProject, warcPath, func(progress cannerclient.UploadProgress) {
+		latest.Store(&progress)
+	})
+	close(done)
+	reporter.Wait()
+	return receipt, err
+}
+
+func reportUploadProgress(done <-chan struct{}, latest *atomic.Pointer[cannerclient.UploadProgress], interval time.Duration, report func(cannerclient.UploadProgress)) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if progress := latest.Load(); progress != nil {
+				report(*progress)
+			}
+		case <-done:
+			return
+		}
+	}
+}
+
+func uploadPercent(progress cannerclient.UploadProgress) float64 {
+	if progress.BytesTotal <= 0 {
+		return 0
+	}
+	return float64(progress.BytesDone) * 100 / float64(progress.BytesTotal)
 }
 
 func removeJobWARC(warcPath string, jobID int64) {
