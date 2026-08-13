@@ -84,11 +84,13 @@ func waitLine(t *testing.T, lines <-chan string, want string) {
 func TestJobWARCWriterProducesExactlyOneFile(t *testing.T) {
 	outputDirectory := t.TempDir()
 	tempDirectory := t.TempDir()
-	feedback := make(chan string, 2)
-	settings := newWARCClientSettings("archive.test", 42, outputDirectory, tempDirectory, feedback)
+	settings := newWARCClientSettings("archive.test", 42, outputDirectory, tempDirectory)
 
 	if settings.RotatorSettings.WARCSize != math.MaxFloat64 {
 		t.Fatalf("WARCSize = %v, want rotation disabled", settings.RotatorSettings.WARCSize)
+	}
+	if settings.DisableKeepAlives {
+		t.Fatal("keepalive is disabled")
 	}
 	if got := settings.RotatorSettings.WarcinfoContent.Get("hostname"); got != "archive.test" {
 		t.Fatalf("hostname = %q, want archive.test", got)
@@ -101,15 +103,11 @@ func TestJobWARCWriterProducesExactlyOneFile(t *testing.T) {
 	if err := writeJobMetadata(warcClient, "60233854", "archivist", string(protocol.OutcomeSuccess), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := warcClient.Close(); err != nil {
+	finalizeResult, err := warcClient.Shutdown(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	close(feedback)
-
-	var filenames []string
-	for filename := range feedback {
-		filenames = append(filenames, filename)
-	}
+	filenames := finalizeResult.FinalizedFiles
 	if len(filenames) != 1 {
 		t.Fatalf("got %d WARC files, want one: %v", len(filenames), filenames)
 	}
@@ -146,8 +144,7 @@ func TestJobWARCWriterProducesExactlyOneFile(t *testing.T) {
 func TestArchiveHonorsCanceledContext(t *testing.T) {
 	outputDirectory := t.TempDir()
 	tempDirectory := t.TempDir()
-	feedback := make(chan string, 2)
-	settings := newWARCClientSettings("archive.test", 43, outputDirectory, tempDirectory, feedback)
+	settings := newWARCClientSettings("archive.test", 43, outputDirectory, tempDirectory)
 
 	warcClient, err := warc.NewWARCWritingHTTPClient(settings)
 	if err != nil {
@@ -159,7 +156,6 @@ func TestArchiveHonorsCanceledContext(t *testing.T) {
 		if err := warcClient.Close(); err != nil {
 			t.Error(err)
 		}
-		close(feedback)
 	})
 
 	ctx, cancel := context.WithCancel(t.Context())
