@@ -51,11 +51,6 @@ func main() {
 		log.Fatal("max-jobs must not be negative")
 	}
 
-	hostname, err := os.Hostname()
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	vlWriter := vl.NewVLWriter(
 		"https://victorialogs.saveweb.org/",
 		"",
@@ -71,14 +66,17 @@ func main() {
 	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 
 	core := zapcore.NewTee(
-		zapcore.NewCore(zapcore.NewJSONEncoder(encoderConfig), zapcore.AddSync(os.Stdout), zap.InfoLevel),
+		omitFields(
+			zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(os.Stdout), zap.InfoLevel),
+			"_stream",
+		),
 		zapcore.NewCore(zapcore.NewJSONEncoder(encoderConfig), zapcore.AddSync(vlWriter), zap.InfoLevel),
 	)
 
 	baseLogger := zap.New(core, zap.AddCaller())
 	defer baseLogger.Sync()
 
-	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("hostname", hostname)))
+	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject)))
 	shutdownCtx, stopShutdown := gracefulShutdownContext(logger)
 	defer stopShutdown()
 
@@ -101,7 +99,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("failed to resolve HQ user", zap.Error(err))
 	}
-	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("user_id", userID), zap.String("hostname", hostname)))
+	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("gh", userID)))
 	undoStdLog := zap.RedirectStdLog(logger)
 	defer undoStdLog()
 
@@ -110,7 +108,10 @@ func main() {
 		logger.Fatal("failed to create tracker", zap.Error(err))
 	}
 	defer tracker.Close()
-	logger.Info("opened HQ project queue", zap.String("worker_id", tracker.WorkerID()), zap.String("project", HQProject))
+	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("gh", userID), zap.String("worker_id", tracker.WorkerID())))
+	undoStdLog = zap.RedirectStdLog(logger)
+	defer undoStdLog()
+	logger.Info("connected to HQ", zap.String("worker_id", tracker.WorkerID()), zap.String("project", HQProject))
 
 	claimedJobs := 0
 	for {
@@ -146,7 +147,7 @@ func main() {
 			continue
 		}
 
-		warcPath, archiveErr, err := archiveJob(job.Context(), job.JobID, vid, userID, hostname)
+		warcPath, archiveErr, err := archiveJob(job.Context(), job.JobID, vid, userID, tracker.WorkerID())
 		if err != nil {
 			logger.Error("failed to create job WARC", zap.Error(err), zap.Int64("job", job.JobID), zap.String("vid", vid))
 			finishJobFailure(job, worker.Failure{
