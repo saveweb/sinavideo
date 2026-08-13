@@ -1,9 +1,15 @@
 https://wiki.saveweb.org/sinavideo
 
-# 参与存档
+## Setup instructions
 
-1. 前往 https://hq.saveweb.org/ 注册。
-2. @ 任意 saveweb 管理员激活你的账号。
-3. 账号激活后创建一个 machine token
-4. 在 `compose.yml` 中填写你的 hq token。
-5. `docker compose up -d`
+1. Go to https://hq.saveweb.org/ to register.
+2. Leave a message in our group so we can activate your account. (TG: https://t.me/saveweb_chat, IRC: stwp-chat:hackint.org, Matrix: #saveweb_chat:matrix.org)
+3. Once your account is activated, create a machine token on the HQ.
+4. Input your hq token in `compose.yml`.
+5. Run `docker compose up -d`.
+
+## Notes
+
+- Use clean internet connections.
+- Do not use proxies or VPNs.
+- Unless otherwise specified, please run only one archive instance per machine; do not run multiple instances.
