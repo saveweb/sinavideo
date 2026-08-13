@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,18 @@ import (
 var exts = []string{"mp4", "flv", "hlv"}
 
 const downloadTimeout = 30 * time.Minute
+
+const mediaDownloadAttempts = 3
+
+var mediaDownloadBackoff = [...]time.Duration{time.Second, 3 * time.Second}
+
+type httpStatusError struct {
+	code int
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("http %d", e.code)
+}
 
 // sourceServers 按探测/下载优先级排列。三个入口共享部分数据（同 vid 三源都命中时 ETag 一致），
 // 但各自都有独占文件——批量测试（72 样本 × 3 源 × 3 ext）显示 s3.ivideo / edge.ivideo /
@@ -101,7 +114,39 @@ func dedupeByETag(cands []Candidate) []Candidate {
 }
 
 func (a *Archiver) download(ctx context.Context, url string) ([]warc.RecordEvent, error) {
-	return a.downloadWithTimeout(ctx, url, downloadTimeout)
+	return a.downloadWithRetry(ctx, url, downloadTimeout, mediaDownloadAttempts, func(attempt int) time.Duration {
+		return mediaDownloadBackoff[attempt-1]
+	})
+}
+
+func (a *Archiver) downloadWithRetry(ctx context.Context, url string, timeout time.Duration, attempts int, backoff func(int) time.Duration) ([]warc.RecordEvent, error) {
+	var allRecordEvents []warc.RecordEvent
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		recordEvents, err := a.downloadWithTimeout(ctx, url, timeout)
+		allRecordEvents = append(allRecordEvents, recordEvents...)
+		if err == nil {
+			return allRecordEvents, nil
+		}
+		lastErr = err
+		var statusErr *httpStatusError
+		if ctx.Err() != nil || errors.As(err, &statusErr) || attempt == attempts {
+			break
+		}
+
+		delay := backoff(attempt)
+		a.logger.Warn("download failed, retrying", zap.String("url", url), zap.Int("attempt", attempt), zap.Int("max_attempts", attempts), zap.Duration("backoff", delay), zap.Error(err))
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return allRecordEvents, context.Cause(ctx)
+		case <-timer.C:
+		}
+	}
+	return allRecordEvents, fmt.Errorf("download %s failed after %d attempt(s): %w", url, attempts, lastErr)
 }
 
 func (a *Archiver) downloadWithTimeout(ctx context.Context, url string, timeout time.Duration) ([]warc.RecordEvent, error) {
@@ -115,7 +160,7 @@ func (a *Archiver) downloadWithTimeout(ctx context.Context, url string, timeout 
 
 	_, recordsEvents, err := a.executeWARCRequest(req, func(r *http.Response) error {
 		if r.StatusCode != http.StatusOK {
-			return fmt.Errorf("http %d", r.StatusCode)
+			return &httpStatusError{code: r.StatusCode}
 		}
 		// Reading to EOF lets the transport establish the response boundary and
 		// retain the connection for keepalive reuse.

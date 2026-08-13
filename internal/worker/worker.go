@@ -18,7 +18,7 @@ import (
 
 const (
 	Project        = "sinavideo"
-	clientVersion  = "sinavideo/1.4.2"
+	clientVersion  = "sinavideo/1.4.3"
 	finishTimeout  = 30 * time.Second
 	uploadInterval = 30 * time.Second
 )

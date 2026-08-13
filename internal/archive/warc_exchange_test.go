@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +51,53 @@ func TestDownloadTimeoutArchivesTruncatedExchange(t *testing.T) {
 		t.Fatalf("download error = %v, want context.DeadlineExceeded", err)
 	}
 	assertHTTPRecordEvents(t, events, true)
+	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)
+}
+
+func TestDownloadRetriesTransientFailure(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		if requests.Add(1) < 3 {
+			w.Header().Set("Content-Length", "4096")
+			w.WriteHeader(stdhttp.StatusOK)
+			_, _ = io.WriteString(w, "truncated")
+			return
+		}
+		_, _ = io.WriteString(w, "complete")
+	}))
+	defer server.Close()
+	warcClient, outputDirectory := installTestWARCClient(t)
+
+	events, err := newTestArchiver(t, warcClient).downloadWithRetry(t.Context(), server.URL, time.Second, 3, func(int) time.Duration { return 0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("requests = %d, want 3", got)
+	}
+	if len(events) != 6 {
+		t.Fatalf("record events = %d, want three request/response pairs", len(events))
+	}
+	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 7)
+}
+
+func TestDownloadDoesNotRetryHTTPStatus(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		requests.Add(1)
+		stdhttp.Error(w, "missing", stdhttp.StatusNotFound)
+	}))
+	defer server.Close()
+	warcClient, outputDirectory := installTestWARCClient(t)
+
+	events, err := newTestArchiver(t, warcClient).downloadWithRetry(t.Context(), server.URL, time.Second, 3, func(int) time.Duration { return 0 })
+	if err == nil || !strings.Contains(err.Error(), "http 404") {
+		t.Fatalf("download error = %v, want HTTP 404", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1", got)
+	}
+	assertHTTPRecordEvents(t, events, false)
 	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)
 }
 
@@ -180,7 +228,11 @@ func assertStrictFinalizedWARC(t *testing.T, warcClient *warc.CustomHTTPClient, 
 	if records != wantRecords {
 		t.Fatalf("strict scan found %d records, want %d", records, wantRecords)
 	}
-	if want := []string{"warcinfo", "request", "response"}; !slices.Equal(recordTypes, want) {
+	want := []string{"warcinfo"}
+	for len(want) < wantRecords {
+		want = append(want, "request", "response")
+	}
+	if !slices.Equal(recordTypes, want) {
 		t.Fatalf("WARC record order = %v, want %v", recordTypes, want)
 	}
 }

@@ -75,6 +75,7 @@ func (a *Archiver) archive(ctx context.Context, vid string) (allWarcRecEvents []
 	}
 
 	var imageURLs []string
+	var mediaDownloadErrs []error
 	seenImageURLs := map[string]bool{}
 	addImageURL := func(u string) {
 		if u != "" && !seenImageURLs[u] {
@@ -189,6 +190,7 @@ func (a *Archiver) archive(ctx context.Context, vid string) (allWarcRecEvents []
 				return allWarcRecEvents, derr
 			}
 			log.Printf("  download %s failed: %v", name, derr)
+			mediaDownloadErrs = append(mediaDownloadErrs, fmt.Errorf("download %s: %w", name, derr))
 			continue
 		}
 		meta.Files = append(meta.Files, FileRef{VID: t.ID, Ext: t.Ext, Size: t.Size, Filename: name, Source: t.Source})
@@ -196,7 +198,7 @@ func (a *Archiver) archive(ctx context.Context, vid string) (allWarcRecEvents []
 	}
 
 	log.Printf("=== VID %s done: %d files ===", vid, len(meta.Files))
-	return allWarcRecEvents, nil
+	return allWarcRecEvents, errors.Join(mediaDownloadErrs...)
 }
 
 // untag 仅用于给 dedupeByETag 喂数据，保留指针关联。
