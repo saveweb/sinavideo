@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.vscode
+data
+warcs
+temp
+*.warc
+*.warc.gz
+*.warc.zst
+*.csv
+*.csv.zst
+*.jsonl
+*.log
