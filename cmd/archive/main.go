@@ -301,7 +301,7 @@ func writeJobMetadata(warcClient *warc.CustomHTTPClient, vid, userID, outcome st
 	recordBatch := warc.NewRecordBatch(nil)
 	recordBatch.Records = append(recordBatch.Records, metadataRecord)
 	// Failure metadata is still useful when ctx was canceled, so finalization
-	// owns this bounded writer operation rather than the request lifecycle.
+	// owns this writer operation rather than the request lifecycle.
 	result, err := warcClient.WriteBatch(context.Background(), recordBatch)
 	if err != nil {
 		return err
