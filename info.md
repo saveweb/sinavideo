@@ -81,7 +81,7 @@ CDN 返回 404 时可尝试直连存储桶，部分文件在 CDN 上已清除但
 
   三个入口各自都存在"只有自己命中、另两个 404"的文件，说明它们背后是不同的存储/缓存层。
 
-**结论：存档时三个源站都要探测**，否则会漏掉独占文件。当前代码（`cmd/archive/cdn.go`）已把三者都加入 `sourceServers`，按 `s3.ivideo → edge.v.iask → edge.ivideo` 顺序探测，命中即停（同一 vid 不会重复下载）。
+**结论：存档时三个源站都要探测**，否则会漏掉独占文件。当前代码（`cmd/archivesinavideo/`）会探测三个源站，以免遗漏独占文件。
 
 > 注：探测时需注意并发与超时——单次小样本（4 个 vid）会因全落在三源交集而误判为"同一后端"；低并发 + 足够样本量才能暴露独占差异。
 
@@ -283,14 +283,14 @@ cid, aid, page, title, subtitle, mid, author, cover, type, vid, duration
 
 ## 六、批量搜索工具
 
-- **存档工具**：`cmd/archive/` — 从 SavewebHQ 的 `sinavideo` 项目领取 job（`value` 为 vid），自动查询 API、探测源站、下载视频和元数据。每个 job 独立生成一个 WARC；归档成功时关闭后上传到 canner，并将 canner receipt 提交给 HQ 后才完成 job；归档失败时在向 HQ 报告失败后清理本地 WARC。Canner 上传失败时保留本地 WARC，只有取得 durable receipt 后才清理。HQ 和 canner 地址默认分别为 `https://hq.saveweb.org/` 与 `https://canner.saveweb.org/`；运行时只需设置 `HQ_MACHINE_TOKEN`，可用 `CANNER_URL` 覆盖 canner 地址，贡献者身份由 machine token 自动解析。
+- **存档工具**：`cmd/archivesinavideo/` — 从 SavewebHQ 的 `sinavideo` 项目领取 job（`value` 为 vid），自动查询 API、探测源站、下载视频和元数据。每个 job 独立生成一个 WARC；归档成功时关闭后上传到 canner，并将 canner receipt 提交给 HQ 后才完成 job；归档失败时在向 HQ 报告失败后清理本地 WARC。Canner 上传失败时保留本地 WARC，只有取得 durable receipt 后才清理。HQ 和 canner 地址默认分别为 `https://hq.saveweb.org/` 与 `https://canner.saveweb.org/`；运行时只需设置 `HQ_MACHINE_TOKEN`，可用 `CANNER_URL` 覆盖 canner 地址，贡献者身份由 machine token 自动解析。
 	- Canner 上传期间每 30 秒记录一次进度，分别标识本地 BLAKE3 `hashing` 与向 receiver `uploading` 两个阶段，并包含已处理字节、总字节和百分比。
   - **爬取策略（全源探测 + ETag 去重）**：三个源站覆盖范围是部分重叠的并集（2.4），因此对每个 id 在「**所有源 × 全扩展名**」上发 HEAD，收集全部 200 命中的候选；再用 **ETag 去重**——指向同一内容（ETag 相同）的多条 URL 只下载一次。这样在最大化召回率的同时避免重复字节/请求。
   - **id 集合**：主 vid + play API 返回的分段 file_id（主档高清，ext=mp4/flv/hlv）；再查 `video_ids.php` 补 ipad_vid，并查 WAP API 补 mp4vid（低清整段，ext=mp4）。主档与低清版本的 ETag 必然不同，不会被互相去重，两者都保留。
   - **探测顺序**：先打 `getvideoidbyvid` 拿 video_id，再打 play API 拿标题/file_id 列表，同时补查 ipad_vid 和 WAP mp4vid，最后全源探测候选并按 ETag 去重后下载。
   - 响应体由 WARC 客户端在底层拦截落盘，业务层只需读完 body 触发记录完成。
 - **源站覆盖率复测**：`scripts/probe_sources.sh` + `scripts/analyze_probe.py` — 分层抽样 vid，对三源全 ext 探测，报告命中率/独占差异/ETag 一致性。定期复测三源存活与覆盖率变化。
-- **单 vid 探测诊断**：`cmd/probetest/` — 不依赖 WARC、tracker 或 canner 的 dry-run 工具，镜像 `cmd/archive` 的「全源全 ext 探测 → ETag 去重」逻辑，打印最终会下载哪些 URL、各自大小/ETag、去重节省了多少次，**不真正下载 body**。用于排查某个 vid 的命中情况和去重是否如预期。
+- **单 vid 探测诊断**：`cmd/probetest/` — 不依赖 WARC、tracker 或 canner 的 dry-run 工具，镜像 `cmd/archivesinavideo` 的「全源全 ext 探测 → ETag 去重」逻辑，打印最终会下载哪些 URL、各自大小/ETag、去重节省了多少次，**不真正下载 body**。用于排查某个 vid 的命中情况和去重是否如预期。
   - 用法：`go run ./cmd/probetest/ <vid> [vid ...]`
   - 覆盖 case：主档+ipad 都在（ipad∈fileids）、仅 ipad 命中（主档全 404）、play API 失效兜底、ipad==false 跳过等。
 - **IDM 下载器**：

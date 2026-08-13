@@ -1,5 +1,5 @@
 // probetest: 不依赖 WARC/tracker/tus 的探测逻辑 dry-run 验证工具。
-// 它镜像 cmd/archive/cdn.go 的 probeCandidates + dedupeByETag 逻辑，
+// 它镜像 cmd/archivesinavideo 的全源探测和 ETag 去重逻辑，
 // 对一批 vid 执行「全源全 ext 探测 → ETag 去重」，打印最终会下载哪些 URL，
 // 用以验证覆盖率与去重是否如预期，而不真正下载 body。
 package main
