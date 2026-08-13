@@ -1,6 +1,14 @@
 package main
 
-import "go.uber.org/zap/zapcore"
+import (
+	"time"
+
+	"go.uber.org/zap/zapcore"
+)
+
+func utcISO8601TimeEncoder(timestamp time.Time, encoder zapcore.PrimitiveArrayEncoder) {
+	encoder.AppendString(timestamp.UTC().Format("2006-01-02T15:04:05.000Z07:00"))
+}
 
 type omitFieldsCore struct {
 	zapcore.Core

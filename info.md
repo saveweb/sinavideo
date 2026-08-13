@@ -283,7 +283,7 @@ cid, aid, page, title, subtitle, mid, author, cover, type, vid, duration
 
 ## 六、批量搜索工具
 
-- **存档工具**：`cmd/archive/` — 从 SavewebHQ 的 `sinavideo` 项目领取 job（`value` 为 vid），自动查询 API、探测源站、下载视频和元数据。每个 job 独立生成一个 WARC，关闭后上传到 canner，并将 canner receipt 提交给 HQ 后才完成 job。HQ 和 canner 地址默认分别为 `https://hq.saveweb.org/` 与 `https://canner.saveweb.org/`；运行时只需设置 `HQ_MACHINE_TOKEN`，可用 `CANNER_URL` 覆盖 canner 地址，贡献者身份由 machine token 自动解析。
+- **存档工具**：`cmd/archive/` — 从 SavewebHQ 的 `sinavideo` 项目领取 job（`value` 为 vid），自动查询 API、探测源站、下载视频和元数据。每个 job 独立生成一个 WARC；归档成功时关闭后上传到 canner，并将 canner receipt 提交给 HQ 后才完成 job；归档失败时在向 HQ 报告失败后清理本地 WARC。Canner 上传失败时保留本地 WARC，只有取得 durable receipt 后才清理。HQ 和 canner 地址默认分别为 `https://hq.saveweb.org/` 与 `https://canner.saveweb.org/`；运行时只需设置 `HQ_MACHINE_TOKEN`，可用 `CANNER_URL` 覆盖 canner 地址，贡献者身份由 machine token 自动解析。
   - **爬取策略（全源探测 + ETag 去重）**：三个源站覆盖范围是部分重叠的并集（2.4），因此对每个 id 在「**所有源 × 全扩展名**」上发 HEAD，收集全部 200 命中的候选；再用 **ETag 去重**——指向同一内容（ETag 相同）的多条 URL 只下载一次。这样在最大化召回率的同时避免重复字节/请求。
   - **id 集合**：主 vid + play API 返回的分段 file_id（主档高清，ext=mp4/flv/hlv）；再查 `video_ids.php` 补 ipad_vid，并查 WAP API 补 mp4vid（低清整段，ext=mp4）。主档与低清版本的 ETag 必然不同，不会被互相去重，两者都保留。
   - **探测顺序**：先打 `getvideoidbyvid` 拿 video_id，再打 play API 拿标题/file_id 列表，同时补查 ipad_vid 和 WAP mp4vid，最后全源探测候选并按 ETag 去重后下载。

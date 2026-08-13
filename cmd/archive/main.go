@@ -50,7 +50,19 @@ func main() {
 	if flagMaxJobs < 0 {
 		log.Fatal("max-jobs must not be negative")
 	}
+	baseLogger, closeLogger := newLogger()
+	defer closeLogger()
 
+	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject)))
+	shutdownCtx, stopShutdown := gracefulShutdownContext(logger)
+	defer stopShutdown()
+
+	if err := runWorker(shutdownCtx, baseLogger); err != nil {
+		logger.Fatal("archive worker stopped", zap.Error(err))
+	}
+}
+
+func newLogger() (*zap.Logger, func()) {
 	vlWriter := vl.NewVLWriter(
 		"https://victorialogs.saveweb.org/",
 		"",
@@ -58,12 +70,11 @@ func main() {
 		500,
 		2*time.Second,
 	)
-	defer vlWriter.Close()
 
 	encoderConfig := zap.NewProductionEncoderConfig()
 	encoderConfig.MessageKey = "_msg"
 	encoderConfig.TimeKey = "_time"
-	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	encoderConfig.EncodeTime = utcISO8601TimeEncoder
 
 	core := zapcore.NewTee(
 		omitFields(
@@ -74,38 +85,39 @@ func main() {
 	)
 
 	baseLogger := zap.New(core, zap.AddCaller())
-	defer baseLogger.Sync()
+	return baseLogger, func() {
+		_ = baseLogger.Sync()
+		vlWriter.Close()
+	}
+}
 
-	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject)))
-	shutdownCtx, stopShutdown := gracefulShutdownContext(logger)
-	defer stopShutdown()
-
+func runWorker(ctx context.Context, baseLogger *zap.Logger) error {
 	hqMachineToken := os.Getenv("HQ_MACHINE_TOKEN")
 	cannerURL := os.Getenv("CANNER_URL")
 	if hqMachineToken == "" {
-		logger.Fatal("HQ_MACHINE_TOKEN must be set")
+		return errors.New("HQ_MACHINE_TOKEN must be set")
 	}
 
 	canner, err := cannerclient.New(cannerURL)
 	if err != nil {
-		logger.Fatal("failed to create canner client", zap.Error(err))
+		return fmt.Errorf("create canner client: %w", err)
 	}
 
 	hqConfig := worker.Config{
 		MachineToken:  hqMachineToken,
 		ClientVersion: HQClientVersion,
 	}
-	userID, err := worker.WhoAmI(shutdownCtx, hqConfig)
+	userID, err := worker.WhoAmI(ctx, hqConfig)
 	if err != nil {
-		logger.Fatal("failed to resolve HQ user", zap.Error(err))
+		return fmt.Errorf("resolve HQ user: %w", err)
 	}
 	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("gh", userID)))
 	undoStdLog := zap.RedirectStdLog(logger)
 	defer undoStdLog()
 
-	tracker, err := worker.OpenProjectQueue(shutdownCtx, hqConfig, HQProject)
+	tracker, err := worker.OpenProjectQueue(ctx, hqConfig, HQProject)
 	if err != nil {
-		logger.Fatal("failed to create tracker", zap.Error(err))
+		return fmt.Errorf("create tracker: %w", err)
 	}
 	defer tracker.Close()
 	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", HQProject), zap.String("gh", userID), zap.String("worker_id", tracker.WorkerID())))
@@ -113,81 +125,95 @@ func main() {
 	defer undoStdLog()
 	logger.Info("connected to HQ", zap.String("worker_id", tracker.WorkerID()), zap.String("project", HQProject))
 
+	return claimJobs(ctx, tracker, canner, userID)
+}
+
+func claimJobs(ctx context.Context, tracker *worker.ProjectQueue, canner *cannerclient.Client, userID string) error {
 	claimedJobs := 0
 	for {
-		if shutdownCtx.Err() != nil {
+		if ctx.Err() != nil {
 			logger.Info("stopped before claiming another HQ job")
-			return
+			return nil
 		}
 		if flagMaxJobs > 0 && claimedJobs >= flagMaxJobs {
 			logger.Info("reached job limit", zap.Int("claimed_jobs", claimedJobs))
-			return
+			return nil
 		}
-		batch, err := tracker.Claim(shutdownCtx, worker.ClaimOptions{MaxJobs: 1, AcceptTypes: []string{protocol.JobTypeSeed}})
+		batch, err := tracker.Claim(ctx, worker.ClaimOptions{MaxJobs: 1, AcceptTypes: []string{protocol.JobTypeSeed}})
 		if err != nil {
-			if shutdownCtx.Err() != nil {
+			if ctx.Err() != nil {
 				logger.Info("stopped while waiting for an HQ job")
-				return
+				return nil
 			}
-			logger.Fatal("failed to claim HQ job", zap.Error(err), zap.String("client_version", HQClientVersion))
+			return fmt.Errorf("claim HQ job with %s: %w", HQClientVersion, err)
 		}
 		if len(batch.Jobs) == 0 {
-			return
+			return nil
 		}
 
 		job := batch.Jobs[0]
 		claimedJobs++
-		vid := job.Spec.Value
-		if !vidPattern.MatchString(vid) {
-			logger.Error("HQ job value is not a vid", zap.Int64("job", job.JobID), zap.String("value", vid))
-			finishJobFailure(job, worker.Failure{
-				Retryable: false,
-				Error:     protocol.ExecutionError{Code: "invalid_vid", Message: "job value must be a decimal vid", Details: protocol.Attrs{}},
-			})
-			continue
+		if err := processJob(job, canner, userID, tracker.WorkerID()); err != nil {
+			return err
 		}
+	}
+}
 
-		warcPath, archiveErr, err := archiveJob(job.Context(), job.JobID, vid, userID, tracker.WorkerID())
-		if err != nil {
-			logger.Error("failed to create job WARC", zap.Error(err), zap.Int64("job", job.JobID), zap.String("vid", vid))
-			finishJobFailure(job, worker.Failure{
-				Retryable: true,
-				Error:     protocol.ExecutionError{Code: "warc_failed", Message: err.Error(), Details: protocol.Attrs{}},
-			})
-			continue
-		}
-		if archiveErr != nil {
-			logger.Error("failed to archive job", zap.Error(archiveErr), zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath))
-			finishJobFailure(job, worker.Failure{
-				Retryable: true,
-				Error:     protocol.ExecutionError{Code: "archive_failed", Message: archiveErr.Error(), Details: protocol.Attrs{}},
-			})
-			continue
-		}
+func processJob(job *worker.Job, canner *cannerclient.Client, userID, workerID string) error {
+	vid := job.Spec.Value
+	if !vidPattern.MatchString(vid) {
+		logger.Error("HQ job value is not a vid", zap.Int64("job", job.JobID), zap.String("value", vid))
+		return finishJobFailure(job, worker.Failure{
+			Retryable: false,
+			Error:     protocol.ExecutionError{Code: "invalid_vid", Message: "job value must be a decimal vid", Details: protocol.Attrs{}},
+		})
+	}
 
-		logger.Info("uploading job WARC to canner", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath))
-		receipt, err := canner.UploadFile(job.Context(), HQProject, warcPath)
-		if err != nil {
-			logger.Error("failed to upload job WARC to canner", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath))
-			finishJobFailure(job, worker.Failure{
-				Retryable: true,
-				Error:     protocol.ExecutionError{Code: "artifact_upload_failed", Message: err.Error(), Details: protocol.Attrs{}},
-			})
-			continue
-		}
-		if err := os.Remove(warcPath); err != nil {
-			logger.Error("failed to remove uploaded job WARC", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath))
-		}
+	warcPath, archiveErr, err := archiveJob(job.Context(), job.JobID, vid, userID, workerID)
+	if err != nil {
+		logger.Error("failed to create job WARC", zap.Error(err), zap.Int64("job", job.JobID), zap.String("vid", vid))
+		return finishJobFailure(job, worker.Failure{
+			Retryable: true,
+			Error:     protocol.ExecutionError{Code: "warc_failed", Message: err.Error(), Details: protocol.Attrs{}},
+		})
+	}
 
-		outcome := protocol.Outcome{Kind: protocol.OutcomeSuccess, Meta: protocol.Attrs{"vid": vid}}
-		if err := completeJob(job, outcome, artifactReceipt(receipt)); err != nil {
-			if errors.Is(err, worker.ErrLeaseLost) {
-				logger.Error("HQ job lease was lost before completion", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
-				continue
-			}
-			logger.Fatal("failed to complete HQ job", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
+	if archiveErr != nil {
+		logger.Error("failed to archive job", zap.Error(archiveErr), zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath))
+		err := finishJobFailure(job, worker.Failure{
+			Retryable: true,
+			Error:     protocol.ExecutionError{Code: "archive_failed", Message: archiveErr.Error(), Details: protocol.Attrs{}},
+		})
+		removeJobWARC(warcPath, job.JobID)
+		return err
+	}
+
+	logger.Info("uploading job WARC to canner", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath))
+	receipt, err := canner.UploadFile(job.Context(), HQProject, warcPath)
+	if err != nil {
+		logger.Error("failed to upload job WARC to canner", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath))
+		return finishJobFailure(job, worker.Failure{
+			Retryable: true,
+			Error:     protocol.ExecutionError{Code: "artifact_upload_failed", Message: err.Error(), Details: protocol.Attrs{}},
+		})
+	}
+	removeJobWARC(warcPath, job.JobID)
+
+	outcome := protocol.Outcome{Kind: protocol.OutcomeSuccess, Meta: protocol.Attrs{"vid": vid}}
+	if err := completeJob(job, outcome, artifactReceipt(receipt)); err != nil {
+		if errors.Is(err, worker.ErrLeaseLost) {
+			logger.Error("HQ job lease was lost before completion", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
+			return nil
 		}
-		logger.Info("completed HQ job", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
+		return fmt.Errorf("complete HQ job %d with receipt %s: %w", job.JobID, receipt.ID, err)
+	}
+	logger.Info("completed HQ job", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
+	return nil
+}
+
+func removeJobWARC(warcPath string, jobID int64) {
+	if err := os.Remove(warcPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logger.Error("failed to remove job WARC", zap.Error(err), zap.Int64("job", jobID), zap.String("warc", warcPath))
 	}
 }
 
@@ -331,18 +357,19 @@ func completeJob(job *worker.Job, outcome protocol.Outcome, receipt protocol.Art
 	return job.Complete(ctx, outcome, receipt)
 }
 
-func finishJobFailure(job *worker.Job, failure worker.Failure) {
+func finishJobFailure(job *worker.Job, failure worker.Failure) error {
 	if cause := context.Cause(job.Context()); cause != nil {
 		logger.Error("cannot fail HQ job after losing its lease", zap.Error(cause), zap.Int64("job", job.JobID), zap.String("code", failure.Error.Code))
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := job.Fail(ctx, failure); err != nil {
 		if errors.Is(err, worker.ErrLeaseLost) {
 			logger.Error("HQ job lease was lost before failure could be reported", zap.Error(err), zap.Int64("job", job.JobID), zap.String("code", failure.Error.Code))
-			return
+			return nil
 		}
-		logger.Fatal("failed to fail HQ job", zap.Error(err), zap.Int64("job", job.JobID), zap.String("code", failure.Error.Code))
+		return fmt.Errorf("fail HQ job %d with code %s: %w", job.JobID, failure.Error.Code, err)
 	}
+	return nil
 }

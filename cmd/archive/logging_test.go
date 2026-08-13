@@ -5,10 +5,32 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+func TestUTCISO8601TimeEncoder(t *testing.T) {
+	var output bytes.Buffer
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.TimeKey = "_time"
+	encoderConfig.EncodeTime = utcISO8601TimeEncoder
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(encoderConfig), zapcore.AddSync(&output), zap.InfoLevel)
+	timestamp := time.Date(2026, time.August, 13, 14, 30, 45, 123_000_000, time.FixedZone("CEST", 2*60*60))
+
+	if err := core.Write(zapcore.Entry{Level: zap.InfoLevel, Time: timestamp, Message: "test"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var entry map[string]any
+	if err := json.Unmarshal(output.Bytes(), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if got := entry["_time"]; got != "2026-08-13T12:30:45.123Z" {
+		t.Fatalf("_time = %q, want UTC", got)
+	}
+}
 
 func TestTerminalLogOmitsStream(t *testing.T) {
 	var terminal bytes.Buffer

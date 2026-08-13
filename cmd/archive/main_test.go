@@ -190,6 +190,22 @@ func TestArtifactReceipt(t *testing.T) {
 	}
 }
 
+func TestRemoveJobWARC(t *testing.T) {
+	logger = zap.NewNop()
+	warcPath := filepath.Join(t.TempDir(), "job.warc.zst")
+	if err := os.WriteFile(warcPath, []byte("warc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	removeJobWARC(warcPath, 42)
+	if _, err := os.Stat(warcPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("WARC still exists after cleanup: %v", err)
+	}
+
+	// Cleanup is idempotent so an already-removed artifact is not an error.
+	removeJobWARC(warcPath, 42)
+}
+
 func TestLiveArchiveAndCannerUpload(t *testing.T) {
 	vid := os.Getenv("SINAVIDEO_LIVE_VID")
 	cannerURL := os.Getenv("SINAVIDEO_TEST_CANNER_URL")
