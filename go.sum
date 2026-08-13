@@ -28,8 +28,8 @@ github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRI
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/quic-go/qpack v0.6.0 h1:g7W+BMYynC1LbYLSqRt8PBg5Tgwxn214ZZR34VIOjz8=
 github.com/quic-go/qpack v0.6.0/go.mod h1:lUpLKChi8njB4ty2bFLX2x4gzDqXwUpaO1DP9qMDZII=
-github.com/saveweb/canner v0.0.0-20260813173658-4e0a663fc8b3 h1:sP6SvEmBceiJg31xFqeVvkLI3qP7Pa2yfuTg/kqvvl0=
-github.com/saveweb/canner v0.0.0-20260813173658-4e0a663fc8b3/go.mod h1:aZ8ak5Mdpco5hKgf27w9yJ7jag3OrAMMZXxY0FfGJ1g=
+github.com/saveweb/canner v0.0.0-20260813174136-c0a1182d3493 h1:CBllHZlFdCKIwc9PujIP+U5QgVhj6eeHqXAvAGbk2+k=
+github.com/saveweb/canner v0.0.0-20260813174136-c0a1182d3493/go.mod h1:aZ8ak5Mdpco5hKgf27w9yJ7jag3OrAMMZXxY0FfGJ1g=
 github.com/saveweb/fhttp v0.0.0-20260813052251-339e498ce2d1 h1:RqbcOLwic7YRQ6C1+M27AhLA2KU/rV3Yqqe8QLPp6/Q=
 github.com/saveweb/fhttp v0.0.0-20260813052251-339e498ce2d1/go.mod h1:o2MQuRqq/jVu9Hu00Nc6tbn/Y9P8AGstmXhhP9ChSo0=
 github.com/saveweb/gowarc v0.0.0-20260813070235-8859bc2016f4 h1:eQQHPJZxpL+9s0q+T3OqMYniP3uUth4iRcXXwxJwBgw=
