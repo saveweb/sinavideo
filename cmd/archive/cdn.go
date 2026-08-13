@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -55,19 +56,20 @@ func probeCandidates(ctx context.Context, id string, extList []string) (cands []
 			if err != nil {
 				continue
 			}
-			feedbackCh := make(chan warc.FeedbackEvent, 1)
-			reqCtx := req.Context()
-			reqCtx = warc.WithFeedbackChannel(reqCtx, feedbackCh)
-
-			r, err := client.Do(req.WithContext(reqCtx))
+			exchange, startEvents, err := startWARCRequest(req)
+			allRecEvents = append(allRecEvents, startEvents...)
 			if err != nil {
 				if ctx.Err() != nil {
-					return cands, allRecEvents, context.Cause(ctx)
+					return cands, allRecEvents, errors.Join(context.Cause(ctx), err)
 				}
 				continue
 			}
-			r.Body.Close()
-			allRecEvents = append(allRecEvents, <-feedbackCh...)
+			r := exchange.Response
+			events, archiveErr := finishWARCRequest(exchange)
+			allRecEvents = append(allRecEvents, events...)
+			if archiveErr != nil {
+				return cands, allRecEvents, archiveErr
+			}
 			if r.StatusCode == 200 {
 				x_sz, _ := strconv.ParseInt(r.Header.Get("X-Filesize"), 10, 64)
 				cl_sz, _ := strconv.ParseInt(r.Header.Get("Content-Length"), 10, 64)
@@ -118,21 +120,19 @@ func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration)
 		return nil, err
 	}
 
-	feedbackCh := make(chan warc.FeedbackEvent, 1)
-	reqCtx := req.Context()
-	reqCtx = warc.WithFeedbackChannel(reqCtx, feedbackCh)
-
-	r, err := client.Do(req.WithContext(reqCtx))
+	exchange, recordsEvents, err := startWARCRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, context.Cause(ctx)
+			return recordsEvents, errors.Join(context.Cause(ctx), err)
 		}
-		return nil, err
+		return recordsEvents, err
 	}
+	r := exchange.Response
 	defer func() {
-		recordsEvents = <-feedbackCh
+		var archiveErr error
+		recordsEvents, archiveErr = finishWARCRequest(exchange)
+		err = errors.Join(err, archiveErr)
 	}()
-	defer r.Body.Close()
 	if r.StatusCode != 200 {
 		return recordsEvents, fmt.Errorf("http %d", r.StatusCode)
 	}

@@ -206,7 +206,7 @@ func gracefulShutdownContext(logger *zap.Logger) (context.Context, context.Cance
 	}
 }
 
-func newWARCClientSettings(hostname string, jobID int64, outputDirectory, tempDirectory string, filenameFeedback chan string) warc.HTTPClientSettings {
+func newWARCClientSettings(hostname string, jobID int64, outputDirectory, tempDirectory string) warc.HTTPClientSettings {
 	rotatorSettings := warc.NewRotatorSettings(hostname)
 	rotatorSettings.WarcinfoContent.Set("software", "saveweb_sinavideo_archive/020260620")
 	rotatorSettings.WarcinfoContent.Add("software", "saveweb_gowarc/020260620")
@@ -217,7 +217,6 @@ func newWARCClientSettings(hostname string, jobID int64, outputDirectory, tempDi
 	rotatorSettings.WARCSize = math.MaxFloat64
 	rotatorSettings.WARCWriterPoolSize = 1
 	rotatorSettings.OutputDirectory = outputDirectory
-	rotatorSettings.WARCFilenameFeedbackChan = filenameFeedback
 
 	return warc.HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
@@ -233,14 +232,13 @@ func newWARCClientSettings(hostname string, jobID int64, outputDirectory, tempDi
 		DNSResolutionTimeout:    5 * time.Second,
 		DNSRecordsTTL:           30 * time.Minute,
 		DNSCacheSize:            10000,
-		MaxReadBeforeTruncate:   1000000000,
 		DecompressBody:          true,
 		FollowRedirects:         true,
 		InsecureSkipVerifyCerts: false,
 		RandomLocalIP:           true,
 		EnableHTTP2:             false,
 		EnableHTTP3:             false,
-		EnableKeepAlive:         true,
+		DisableKeepAlives:       false,
 		DigestAlgorithm:         warc.BLAKE3,
 		DefaultUserAgent:        userAgent,
 	}
@@ -253,8 +251,7 @@ func archiveJob(ctx context.Context, jobID int64, vid, userID, hostname string) 
 }
 
 func archiveJobTo(ctx context.Context, jobID int64, vid, userID, hostname, outputDirectory, tempDirectory string) (warcPath string, archiveErr, err error) {
-	filenameFeedback := make(chan string, 2)
-	settings := newWARCClientSettings(hostname, jobID, outputDirectory, tempDirectory, filenameFeedback)
+	settings := newWARCClientSettings(hostname, jobID, outputDirectory, tempDirectory)
 
 	warcClient, err := warc.NewWARCWritingHTTPClient(settings)
 	if err != nil {
@@ -269,16 +266,14 @@ func archiveJobTo(ctx context.Context, jobID int64, vid, userID, hostname, outpu
 		outcome = "failed"
 	}
 	metadataErr := writeJobMetadata(warcClient, vid, userID, outcome, records)
-	closeErr := warcClient.Close()
-	close(filenameFeedback)
-	if err := errors.Join(metadataErr, closeErr); err != nil {
+	// Network work obeys ctx, but a canceled lease must not leave an open WARC.
+	// Shutdown waits for already-owned capture work and finalizes the local file.
+	finalizeResult, finalizeErr := warcClient.Shutdown(context.Background())
+	if err := errors.Join(metadataErr, finalizeErr); err != nil {
 		return "", archiveErr, err
 	}
 
-	var filenames []string
-	for filename := range filenameFeedback {
-		filenames = append(filenames, filename)
-	}
+	filenames := finalizeResult.FinalizedFiles
 	if len(filenames) != 1 {
 		return "", archiveErr, fmt.Errorf("job %d produced %d WARC files, want exactly one", jobID, len(filenames))
 	}
@@ -303,12 +298,16 @@ func writeJobMetadata(warcClient *warc.CustomHTTPClient, vid, userID, outcome st
 		return err
 	}
 
-	feedback := make(chan warc.FeedbackEvent, 1)
-	recordBatch := warc.NewRecordBatch(feedback)
+	recordBatch := warc.NewRecordBatch(nil)
 	recordBatch.Records = append(recordBatch.Records, metadataRecord)
-	warcClient.WARCWriter <- recordBatch
-	if written, ok := <-feedback; !ok || len(written) != 1 {
-		return fmt.Errorf("metadata writer returned %d records, want one", len(written))
+	// Failure metadata is still useful when ctx was canceled, so finalization
+	// owns this bounded writer operation rather than the request lifecycle.
+	result, err := warcClient.WriteBatch(context.Background(), recordBatch)
+	if err != nil {
+		return err
+	}
+	if len(result.Events) != 1 {
+		return fmt.Errorf("metadata writer returned %d records, want one", len(result.Events))
 	}
 	return nil
 }

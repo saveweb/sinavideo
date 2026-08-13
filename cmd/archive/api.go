@@ -47,21 +47,19 @@ func getVideoID(ctx context.Context, vid string) (videoid string, recordsEvents 
 	log.Println("getVideoID", url)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 
-	feedbackCh := make(chan warc.FeedbackEvent, 1)
-	reqCtx := req.Context()
-	reqCtx = warc.WithFeedbackChannel(reqCtx, feedbackCh)
-
-	r, err := client.Do(req.WithContext(reqCtx))
+	exchange, recordsEvents, err := startWARCRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", recordsEvents, context.Cause(ctx)
+			return "", recordsEvents, errors.Join(context.Cause(ctx), err)
 		}
 		return "", recordsEvents, err
 	}
+	r := exchange.Response
 	defer func() {
-		recordsEvents = <-feedbackCh
+		var archiveErr error
+		recordsEvents, archiveErr = finishWARCRequest(exchange)
+		err = errors.Join(err, archiveErr)
 	}()
-	defer r.Body.Close()
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		return "", recordsEvents, err
@@ -116,21 +114,19 @@ func getIpadVID(ctx context.Context, vid string) (ipadVID string, recordsEvents 
 	log.Println("getIpadVID", url)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 
-	feedbackCh := make(chan warc.FeedbackEvent, 1)
-	reqCtx := req.Context()
-	reqCtx = warc.WithFeedbackChannel(reqCtx, feedbackCh)
-
-	r, err := client.Do(req.WithContext(reqCtx))
+	exchange, recordsEvents, err := startWARCRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", recordsEvents, context.Cause(ctx)
+			return "", recordsEvents, errors.Join(context.Cause(ctx), err)
 		}
 		return "", recordsEvents, err
 	}
+	r := exchange.Response
 	defer func() {
-		recordsEvents = <-feedbackCh
+		var archiveErr error
+		recordsEvents, archiveErr = finishWARCRequest(exchange)
+		err = errors.Join(err, archiveErr)
 	}()
-	defer r.Body.Close()
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		return "", recordsEvents, err
@@ -177,20 +173,19 @@ func getWAPVideoInfo(ctx context.Context, vid string) (info WAPVideoInfo, record
 	log.Println("getWAPVideoInfo", url)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 
-	feedbackCh := make(chan warc.FeedbackEvent, 1)
-	reqCtx := warc.WithFeedbackChannel(req.Context(), feedbackCh)
-
-	r, err := client.Do(req.WithContext(reqCtx))
+	exchange, recordsEvents, err := startWARCRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return WAPVideoInfo{}, recordsEvents, context.Cause(ctx)
+			return WAPVideoInfo{}, recordsEvents, errors.Join(context.Cause(ctx), err)
 		}
 		return WAPVideoInfo{}, recordsEvents, err
 	}
+	r := exchange.Response
 	defer func() {
-		recordsEvents = <-feedbackCh
+		var archiveErr error
+		recordsEvents, archiveErr = finishWARCRequest(exchange)
+		err = errors.Join(err, archiveErr)
 	}()
-	defer r.Body.Close()
 
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -206,21 +201,19 @@ func getPlayInfo(ctx context.Context, videoID string) (playdata *PlayData, rawRe
 
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 
-	feedbackCh := make(chan warc.FeedbackEvent, 1)
-	reqCtx := req.Context()
-	reqCtx = warc.WithFeedbackChannel(reqCtx, feedbackCh)
-
-	r, err := client.Do(req.WithContext(reqCtx))
+	exchange, recordsEvents, err := startWARCRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, recordsEvents, context.Cause(ctx)
+			return nil, nil, recordsEvents, errors.Join(context.Cause(ctx), err)
 		}
 		return nil, nil, recordsEvents, err
 	}
+	r := exchange.Response
 	defer func() {
-		recordsEvents = <-feedbackCh
+		var archiveErr error
+		recordsEvents, archiveErr = finishWARCRequest(exchange)
+		err = errors.Join(err, archiveErr)
 	}()
-	defer r.Body.Close()
 
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
