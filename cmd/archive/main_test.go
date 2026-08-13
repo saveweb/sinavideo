@@ -92,6 +92,9 @@ func TestJobWARCWriterProducesExactlyOneFile(t *testing.T) {
 	if settings.DisableKeepAlives {
 		t.Fatal("keepalive is disabled")
 	}
+	if settings.ConnReadDeadline != 30*time.Second {
+		t.Fatalf("ConnReadDeadline = %v, want 30s", settings.ConnReadDeadline)
+	}
 	if got := settings.RotatorSettings.WarcinfoContent.Get("hostname"); got != "archive.test" {
 		t.Fatalf("hostname = %q, want archive.test", got)
 	}

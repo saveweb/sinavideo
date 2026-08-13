@@ -6,10 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 
-	http "github.com/saveweb/fhttp"
 	warc "github.com/saveweb/gowarc"
 )
 
@@ -42,25 +40,10 @@ type VideoFile struct {
 }
 
 // getvideoidbyvid
-func getVideoID(ctx context.Context, vid string) (videoid string, recordsEvents []warc.RecordEvent, err error) {
+func getVideoID(ctx context.Context, vid string) (string, []warc.RecordEvent, error) {
 	url := "https://s.video.sina.com.cn/video/getvideoidbyvid?vid=" + vid
 	log.Println("getVideoID", url)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-
-	exchange, recordsEvents, err := startWARCRequest(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", recordsEvents, errors.Join(context.Cause(ctx), err)
-		}
-		return "", recordsEvents, err
-	}
-	r := exchange.Response
-	defer func() {
-		var archiveErr error
-		recordsEvents, archiveErr = finishWARCRequest(exchange)
-		err = errors.Join(err, archiveErr)
-	}()
-	bodyBytes, err := io.ReadAll(r.Body)
+	bodyBytes, recordsEvents, err := readWARCURL(ctx, url)
 	if err != nil {
 		return "", recordsEvents, err
 	}
@@ -109,25 +92,10 @@ type WAPVideoInfo struct {
 // getIpadVID 通过 vid 查询对应的 ipad_vid（低清整段 MP4 的 ID）。
 // 返回的 ipadVID 在「该视频没有转码低清版（ipad_vid 为 false）」时返回空字符串与 nil error。
 // 视频时长 >6min 且被分段时，主 VID 拿不到原档，此时 ipad_vid 对应的低清 MP4 是 fallback 来源。
-func getIpadVID(ctx context.Context, vid string) (ipadVID string, recordsEvents []warc.RecordEvent, err error) {
+func getIpadVID(ctx context.Context, vid string) (string, []warc.RecordEvent, error) {
 	url := "http://video.sina.com.cn/interface/video_ids/video_ids.php?v=" + vid
 	log.Println("getIpadVID", url)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-
-	exchange, recordsEvents, err := startWARCRequest(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", recordsEvents, errors.Join(context.Cause(ctx), err)
-		}
-		return "", recordsEvents, err
-	}
-	r := exchange.Response
-	defer func() {
-		var archiveErr error
-		recordsEvents, archiveErr = finishWARCRequest(exchange)
-		err = errors.Join(err, archiveErr)
-	}()
-	bodyBytes, err := io.ReadAll(r.Body)
+	bodyBytes, recordsEvents, err := readWARCURL(ctx, url)
 	if err != nil {
 		return "", recordsEvents, err
 	}
@@ -168,61 +136,29 @@ func parseWAPVideoInfo(raw []byte) (WAPVideoInfo, error) {
 
 // getWAPVideoInfo queries the legacy WAP metadata endpoint. Some deleted videos
 // expose a playable MP4 and thumbnail only here even when the play API fails.
-func getWAPVideoInfo(ctx context.Context, vid string) (info WAPVideoInfo, recordsEvents []warc.RecordEvent, err error) {
+func getWAPVideoInfo(ctx context.Context, vid string) (WAPVideoInfo, []warc.RecordEvent, error) {
 	url := "https://interface.sina.cn/video/wap/videoinfo.d.json?vid=" + vid
 	log.Println("getWAPVideoInfo", url)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-
-	exchange, recordsEvents, err := startWARCRequest(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return WAPVideoInfo{}, recordsEvents, errors.Join(context.Cause(ctx), err)
-		}
-		return WAPVideoInfo{}, recordsEvents, err
-	}
-	r := exchange.Response
-	defer func() {
-		var archiveErr error
-		recordsEvents, archiveErr = finishWARCRequest(exchange)
-		err = errors.Join(err, archiveErr)
-	}()
-
-	raw, err := io.ReadAll(r.Body)
+	raw, recordsEvents, err := readWARCURL(ctx, url)
 	if err != nil {
 		return WAPVideoInfo{}, recordsEvents, err
 	}
-	info, err = parseWAPVideoInfo(raw)
+	info, err := parseWAPVideoInfo(raw)
 	return info, recordsEvents, err
 }
 
-func getPlayInfo(ctx context.Context, videoID string) (playdata *PlayData, rawResp json.RawMessage, recordsEvents []warc.RecordEvent, err error) {
+func getPlayInfo(ctx context.Context, videoID string) (*PlayData, json.RawMessage, []warc.RecordEvent, error) {
 	url := "http://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id=" + videoID
 	log.Println("getPlayInfo", url)
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-
-	exchange, recordsEvents, err := startWARCRequest(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, nil, recordsEvents, errors.Join(context.Cause(ctx), err)
-		}
-		return nil, nil, recordsEvents, err
-	}
-	r := exchange.Response
-	defer func() {
-		var archiveErr error
-		recordsEvents, archiveErr = finishWARCRequest(exchange)
-		err = errors.Join(err, archiveErr)
-	}()
-
-	raw, err := io.ReadAll(r.Body)
+	raw, recordsEvents, err := readWARCURL(ctx, url)
 	if err != nil {
 		return nil, nil, recordsEvents, err
 	}
 
 	var p PlayResp
-	if err = json.Unmarshal(raw, &p); err != nil {
-		return
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, nil, recordsEvents, err
 	}
 	switch p.Code {
 	case 0:

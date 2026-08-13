@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -56,19 +55,13 @@ func probeCandidates(ctx context.Context, id string, extList []string) (cands []
 			if err != nil {
 				continue
 			}
-			exchange, startEvents, err := startWARCRequest(req)
-			allRecEvents = append(allRecEvents, startEvents...)
+			r, events, err := executeWARCRequest(req, func(*http.Response) error { return nil })
+			allRecEvents = append(allRecEvents, events...)
 			if err != nil {
 				if ctx.Err() != nil {
-					return cands, allRecEvents, errors.Join(context.Cause(ctx), err)
+					return cands, allRecEvents, err
 				}
 				continue
-			}
-			r := exchange.Response
-			events, archiveErr := finishWARCRequest(exchange)
-			allRecEvents = append(allRecEvents, events...)
-			if archiveErr != nil {
-				return cands, allRecEvents, archiveErr
 			}
 			if r.StatusCode == 200 {
 				x_sz, _ := strconv.ParseInt(r.Header.Get("X-Filesize"), 10, 64)
@@ -107,11 +100,11 @@ func dedupeByETag(cands []Candidate) []Candidate {
 	return out
 }
 
-func download(ctx context.Context, url string) (recordsEvents []warc.RecordEvent, err error) {
+func download(ctx context.Context, url string) ([]warc.RecordEvent, error) {
 	return downloadWithTimeout(ctx, url, downloadTimeout)
 }
 
-func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration) (recordsEvents []warc.RecordEvent, err error) {
+func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration) ([]warc.RecordEvent, error) {
 	log.Println("download", url)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -120,27 +113,17 @@ func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration)
 		return nil, err
 	}
 
-	exchange, recordsEvents, err := startWARCRequest(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return recordsEvents, errors.Join(context.Cause(ctx), err)
+	_, recordsEvents, err := executeWARCRequest(req, func(r *http.Response) error {
+		if r.StatusCode != http.StatusOK {
+			return fmt.Errorf("http %d", r.StatusCode)
 		}
-		return recordsEvents, err
-	}
-	r := exchange.Response
-	defer func() {
-		var archiveErr error
-		recordsEvents, archiveErr = finishWARCRequest(exchange)
-		err = errors.Join(err, archiveErr)
-	}()
-	if r.StatusCode != 200 {
-		return recordsEvents, fmt.Errorf("http %d", r.StatusCode)
-	}
-	// 响应体由 WARC 客户端在底层拦截并写入 WARC 文件，这里只需读完以触发记录完成。
-	n, err := io.Copy(io.Discard, r.Body)
-	if err != nil {
-		return recordsEvents, err
-	}
-	logger.Info("download", zap.String("url", url), zap.Int64("size", n))
-	return recordsEvents, nil
+		// Reading to EOF lets the transport establish the response boundary and
+		// retain the connection for keepalive reuse.
+		n, err := io.Copy(io.Discard, r.Body)
+		if err == nil {
+			logger.Info("download", zap.String("url", url), zap.Int64("size", n))
+		}
+		return err
+	})
+	return recordsEvents, err
 }

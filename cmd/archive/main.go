@@ -229,6 +229,7 @@ func newWARCClientSettings(hostname string, jobID int64, outputDirectory, tempDi
 		},
 		DialTimeout:             10 * time.Second,
 		ResponseHeaderTimeout:   30 * time.Second,
+		ConnReadDeadline:        30 * time.Second,
 		DNSResolutionTimeout:    5 * time.Second,
 		DNSRecordsTTL:           30 * time.Minute,
 		DNSCacheSize:            10000,

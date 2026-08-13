@@ -56,7 +56,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 
 	if err != nil {
 		if ctx.Err() != nil {
-			return allWarcRecEvents, context.Cause(ctx)
+			return allWarcRecEvents, err
 		}
 		log.Printf("  play api failed: %v, trying sources directly", err)
 		info = &PlayData{}
@@ -110,7 +110,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 	if ipadVID, recs, ipadErr := getIpadVID(ctx, vid); ipadErr != nil {
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if ctx.Err() != nil {
-			return allWarcRecEvents, context.Cause(ctx)
+			return allWarcRecEvents, ipadErr
 		}
 		log.Printf("  ipad_vid lookup failed: %v", ipadErr)
 	} else {
@@ -133,7 +133,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 	if wapInfo, recs, wapErr := getWAPVideoInfo(ctx, vid); wapErr != nil {
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if ctx.Err() != nil {
-			return allWarcRecEvents, context.Cause(ctx)
+			return allWarcRecEvents, wapErr
 		}
 		log.Printf("  WAP video info lookup failed: %v", wapErr)
 	} else {

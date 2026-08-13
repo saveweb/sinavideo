@@ -34,7 +34,26 @@ func TestDownloadNonOKArchivesCompleteExchange(t *testing.T) {
 	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)
 }
 
-func TestDownloadCancellationArchivesTruncatedExchange(t *testing.T) {
+func TestDownloadTimeoutArchivesTruncatedExchange(t *testing.T) {
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(stdhttp.StatusOK)
+		_, _ = io.WriteString(w, strings.Repeat("x", 32))
+		w.(stdhttp.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	warcClient, outputDirectory := installTestWARCClient(t)
+
+	events, err := downloadWithTimeout(t.Context(), server.URL, 100*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("download error = %v, want context.DeadlineExceeded", err)
+	}
+	assertHTTPRecordEvents(t, events, true)
+	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)
+}
+
+func TestRequestCancellationArchivesTruncatedExchange(t *testing.T) {
 	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		w.Header().Set("Content-Length", "4096")
 		w.WriteHeader(stdhttp.StatusOK)
@@ -50,18 +69,35 @@ func TestDownloadCancellationArchivesTruncatedExchange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exchange, events, err := startWARCRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	buf := make([]byte, 32)
-	if _, err := io.ReadFull(exchange.Response.Body, buf); err != nil {
-		t.Fatal(err)
-	}
-	cancel()
-	events, err = finishWARCRequest(exchange)
+	_, events, err := executeWARCRequest(req, func(response *http.Response) error {
+		buf := make([]byte, 32)
+		if _, err := io.ReadFull(response.Body, buf); err != nil {
+			return err
+		}
+		cancel()
+		_, err := io.Copy(io.Discard, response.Body)
+		return err
+	})
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("finish error = %v, want context.Canceled", err)
+		t.Fatalf("request error = %v, want context.Canceled", err)
+	}
+	assertHTTPRecordEvents(t, events, true)
+	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)
+}
+
+func TestReadWARCURLTimeout(t *testing.T) {
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(stdhttp.StatusOK)
+		w.(stdhttp.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	warcClient, outputDirectory := installTestWARCClient(t)
+
+	_, events, err := readWARCURLWithTimeout(t.Context(), server.URL, 100*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("readWARCURL error = %v, want context.DeadlineExceeded", err)
 	}
 	assertHTTPRecordEvents(t, events, true)
 	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)
