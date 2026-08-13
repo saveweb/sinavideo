@@ -105,7 +105,7 @@ func download(ctx context.Context, url string) ([]warc.RecordEvent, error) {
 }
 
 func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration) ([]warc.RecordEvent, error) {
-	log.Println("download", url)
+	logger.Info("download", zap.String("url", url), zap.Duration("timeout", timeout))
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -121,7 +121,7 @@ func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration)
 		// retain the connection for keepalive reuse.
 		n, err := io.Copy(io.Discard, r.Body)
 		if err == nil {
-			logger.Info("download", zap.String("url", url), zap.Int64("size", n))
+			logger.Info("downloaded", zap.String("url", url), zap.Int64("size", n))
 		}
 		return err
 	})

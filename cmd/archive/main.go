@@ -160,6 +160,14 @@ func claimJobs(ctx context.Context, tracker *worker.ProjectQueue, canner *canner
 	}
 }
 
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
 func processJob(job *worker.Job, canner *cannerclient.Client, userID, workerID string) error {
 	vid := job.Spec.Value
 	if !vidPattern.MatchString(vid) {
@@ -189,7 +197,9 @@ func processJob(job *worker.Job, canner *cannerclient.Client, userID, workerID s
 		return err
 	}
 
-	logger.Info("uploading job WARC to canner", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath))
+	warcSize, _ := fileSize(warcPath)
+
+	logger.Info("uploading job WARC to canner", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath), zap.Int64("size", warcSize))
 	receipt, err := canner.UploadFileWithProgressToStdout(job.Context(), HQProject, warcPath, uploadLogInterval)
 	if err != nil {
 		logger.Error("failed to upload job WARC to canner", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath))
