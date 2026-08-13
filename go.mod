@@ -1,4 +1,4 @@
-module sinacloud
+module github.com/saveweb/sinavideo
 
 go 1.26.4
 

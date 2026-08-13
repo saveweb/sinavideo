@@ -6,8 +6,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	archiveworker "sinacloud/internal/worker"
-	"sinacloud/vl"
+	archiveworker "github.com/saveweb/sinavideo/internal/worker"
+	"github.com/saveweb/sinavideo/vl"
 	"syscall"
 	"time"
 

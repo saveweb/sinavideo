@@ -13,12 +13,12 @@ import (
 	hqworker "github.com/saveweb/hq/sdk/worker"
 	"go.uber.org/zap"
 
-	sinaarchive "sinacloud/internal/archive"
+	sinaarchive "github.com/saveweb/sinavideo/internal/archive"
 )
 
 const (
 	Project        = "sinavideo"
-	clientVersion  = "sinavideo/1.4.1"
+	clientVersion  = "sinavideo/1.4.2"
 	finishTimeout  = 30 * time.Second
 	uploadInterval = 30 * time.Second
 )
