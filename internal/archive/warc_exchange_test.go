@@ -1,4 +1,4 @@
-package main
+package archive
 
 import (
 	"context"
@@ -26,7 +26,7 @@ func TestDownloadNonOKArchivesCompleteExchange(t *testing.T) {
 	defer server.Close()
 	warcClient, outputDirectory := installTestWARCClient(t)
 
-	events, err := downloadWithTimeout(t.Context(), server.URL, time.Second)
+	events, err := newTestArchiver(t, warcClient).downloadWithTimeout(t.Context(), server.URL, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "http 404") {
 		t.Fatalf("download error = %v, want HTTP 404", err)
 	}
@@ -45,7 +45,7 @@ func TestDownloadTimeoutArchivesTruncatedExchange(t *testing.T) {
 	defer server.Close()
 	warcClient, outputDirectory := installTestWARCClient(t)
 
-	events, err := downloadWithTimeout(t.Context(), server.URL, 100*time.Millisecond)
+	events, err := newTestArchiver(t, warcClient).downloadWithTimeout(t.Context(), server.URL, 100*time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("download error = %v, want context.DeadlineExceeded", err)
 	}
@@ -69,7 +69,7 @@ func TestRequestCancellationArchivesTruncatedExchange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, events, err := executeWARCRequest(req, func(response *http.Response) error {
+	_, events, err := newTestArchiver(t, warcClient).executeWARCRequest(req, func(response *http.Response) error {
 		buf := make([]byte, 32)
 		if _, err := io.ReadFull(response.Body, buf); err != nil {
 			return err
@@ -95,7 +95,7 @@ func TestReadWARCURLTimeout(t *testing.T) {
 	defer server.Close()
 	warcClient, outputDirectory := installTestWARCClient(t)
 
-	_, events, err := readWARCURLWithTimeout(t.Context(), server.URL, 100*time.Millisecond)
+	_, events, err := newTestArchiver(t, warcClient).readWARCURLWithTimeout(t.Context(), server.URL, 100*time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("readWARCURL error = %v, want context.DeadlineExceeded", err)
 	}
@@ -116,12 +116,12 @@ func installTestWARCClient(t *testing.T) (*warc.CustomHTTPClient, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client = warcClient
-	logger = zap.NewNop()
-	t.Cleanup(func() {
-		client = nil
-	})
 	return warcClient, outputDirectory
+}
+
+func newTestArchiver(t *testing.T, client *warc.CustomHTTPClient) *Archiver {
+	t.Helper()
+	return &Archiver{client: client, logger: zap.NewNop()}
 }
 
 func assertHTTPRecordEvents(t *testing.T, events []warc.RecordEvent, truncated bool) {

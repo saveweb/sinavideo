@@ -4,19 +4,17 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	sinaarchive "sinacloud/internal/archive"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	cannerclient "github.com/saveweb/canner/client"
-	warc "github.com/saveweb/gowarc"
 	"github.com/saveweb/hq/pkg/protocol"
-	"github.com/saveweb/unwarc"
 	"go.uber.org/zap"
 )
 
@@ -81,90 +79,16 @@ func waitLine(t *testing.T, lines <-chan string, want string) {
 	}
 }
 
-func TestJobWARCWriterProducesExactlyOneFile(t *testing.T) {
-	outputDirectory := t.TempDir()
-	tempDirectory := t.TempDir()
-	settings := newWARCClientSettings("archive.test", 42, outputDirectory, tempDirectory)
-
-	if settings.RotatorSettings.WARCSize != math.MaxFloat64 {
-		t.Fatalf("WARCSize = %v, want rotation disabled", settings.RotatorSettings.WARCSize)
-	}
-	if settings.DisableKeepAlives {
-		t.Fatal("keepalive is disabled")
-	}
-	if settings.ConnReadDeadline != 30*time.Second {
-		t.Fatalf("ConnReadDeadline = %v, want 30s", settings.ConnReadDeadline)
-	}
-	if got := settings.RotatorSettings.WarcinfoContent.Get("hostname"); got != "archive.test" {
-		t.Fatalf("hostname = %q, want archive.test", got)
-	}
-
-	warcClient, err := warc.NewWARCWritingHTTPClient(settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeJobMetadata(warcClient, "60233854", "archivist", string(protocol.OutcomeSuccess), nil); err != nil {
-		t.Fatal(err)
-	}
-	finalizeResult, err := warcClient.Shutdown(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	filenames := finalizeResult.FinalizedFiles
-	if len(filenames) != 1 {
-		t.Fatalf("got %d WARC files, want one: %v", len(filenames), filenames)
-	}
-	if !strings.HasPrefix(filenames[0], "SINA_VIDEO_42-") || !strings.HasSuffix(filenames[0], ".warc.zst") {
-		t.Fatalf("unexpected WARC filename %q", filenames[0])
-	}
-	warcPath := filepath.Join(outputDirectory, filenames[0])
-	if _, err := os.Stat(warcPath); err != nil {
-		t.Fatal(err)
-	}
-
-	file, err := os.Open(warcPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	scanner, err := unwarc.NewScanner(file, unwarc.DefaultScannerOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer scanner.Close()
-	records := 0
-	for scanner.Next() {
-		records++
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if records != 2 {
-		t.Fatalf("strict scan found %d records, want warcinfo and metadata", records)
-	}
-}
-
 func TestArchiveHonorsCanceledContext(t *testing.T) {
-	outputDirectory := t.TempDir()
-	tempDirectory := t.TempDir()
-	settings := newWARCClientSettings("archive.test", 43, outputDirectory, tempDirectory)
-
-	warcClient, err := warc.NewWARCWritingHTTPClient(settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client = warcClient
-	t.Cleanup(func() {
-		client = nil
-		if err := warcClient.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := archive(ctx, "60233854"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("archive() error = %v, want context.Canceled", err)
+	archiver := sinaarchive.New(zap.NewNop(), t.TempDir(), t.TempDir())
+	_, archiveErr, err := archiver.ArchiveJob(ctx, 43, "60233854", "archivist", "archive.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(archiveErr, context.Canceled) {
+		t.Fatalf("archive error = %v, want context.Canceled", archiveErr)
 	}
 }
 
@@ -214,7 +138,8 @@ func TestLiveArchiveAndCannerUpload(t *testing.T) {
 	}
 	logger = zap.NewNop()
 
-	warcPath, archiveErr, err := archiveJobTo(t.Context(), 9000001, vid, "test-archivist", "archive.test", t.TempDir(), t.TempDir())
+	archiver := sinaarchive.New(logger, t.TempDir(), t.TempDir())
+	warcPath, archiveErr, err := archiver.ArchiveJob(t.Context(), 9000001, vid, "test-archivist", "archive.test")
 	if err != nil {
 		t.Fatal(err)
 	}

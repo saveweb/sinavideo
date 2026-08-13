@@ -1,4 +1,4 @@
-package main
+package archive
 
 import (
 	"bytes"
@@ -40,10 +40,10 @@ type VideoFile struct {
 }
 
 // getvideoidbyvid
-func getVideoID(ctx context.Context, vid string) (string, []warc.RecordEvent, error) {
+func (a *Archiver) getVideoID(ctx context.Context, vid string) (string, []warc.RecordEvent, error) {
 	url := "https://s.video.sina.com.cn/video/getvideoidbyvid?vid=" + vid
 	log.Println("getVideoID", url)
-	bodyBytes, recordsEvents, err := readWARCURL(ctx, url)
+	bodyBytes, recordsEvents, err := a.readWARCURL(ctx, url)
 	if err != nil {
 		return "", recordsEvents, err
 	}
@@ -92,10 +92,10 @@ type WAPVideoInfo struct {
 // getIpadVID 通过 vid 查询对应的 ipad_vid（低清整段 MP4 的 ID）。
 // 返回的 ipadVID 在「该视频没有转码低清版（ipad_vid 为 false）」时返回空字符串与 nil error。
 // 视频时长 >6min 且被分段时，主 VID 拿不到原档，此时 ipad_vid 对应的低清 MP4 是 fallback 来源。
-func getIpadVID(ctx context.Context, vid string) (string, []warc.RecordEvent, error) {
+func (a *Archiver) getIpadVID(ctx context.Context, vid string) (string, []warc.RecordEvent, error) {
 	url := "http://video.sina.com.cn/interface/video_ids/video_ids.php?v=" + vid
 	log.Println("getIpadVID", url)
-	bodyBytes, recordsEvents, err := readWARCURL(ctx, url)
+	bodyBytes, recordsEvents, err := a.readWARCURL(ctx, url)
 	if err != nil {
 		return "", recordsEvents, err
 	}
@@ -136,10 +136,10 @@ func parseWAPVideoInfo(raw []byte) (WAPVideoInfo, error) {
 
 // getWAPVideoInfo queries the legacy WAP metadata endpoint. Some deleted videos
 // expose a playable MP4 and thumbnail only here even when the play API fails.
-func getWAPVideoInfo(ctx context.Context, vid string) (WAPVideoInfo, []warc.RecordEvent, error) {
+func (a *Archiver) getWAPVideoInfo(ctx context.Context, vid string) (WAPVideoInfo, []warc.RecordEvent, error) {
 	url := "https://interface.sina.cn/video/wap/videoinfo.d.json?vid=" + vid
 	log.Println("getWAPVideoInfo", url)
-	raw, recordsEvents, err := readWARCURL(ctx, url)
+	raw, recordsEvents, err := a.readWARCURL(ctx, url)
 	if err != nil {
 		return WAPVideoInfo{}, recordsEvents, err
 	}
@@ -147,11 +147,11 @@ func getWAPVideoInfo(ctx context.Context, vid string) (WAPVideoInfo, []warc.Reco
 	return info, recordsEvents, err
 }
 
-func getPlayInfo(ctx context.Context, videoID string) (*PlayData, json.RawMessage, []warc.RecordEvent, error) {
+func (a *Archiver) getPlayInfo(ctx context.Context, videoID string) (*PlayData, json.RawMessage, []warc.RecordEvent, error) {
 	url := "http://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id=" + videoID
 	log.Println("getPlayInfo", url)
 
-	raw, recordsEvents, err := readWARCURL(ctx, url)
+	raw, recordsEvents, err := a.readWARCURL(ctx, url)
 	if err != nil {
 		return nil, nil, recordsEvents, err
 	}

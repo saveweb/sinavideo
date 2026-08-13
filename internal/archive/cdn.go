@@ -1,4 +1,4 @@
-package main
+package archive
 
 import (
 	"context"
@@ -43,7 +43,7 @@ type Candidate struct {
 
 // probeCandidates 对 id 在「所有源 × 给定扩展名」上发 HEAD，返回所有 200 命中的候选。
 // 故意探测全部源而非命中即停：三个源覆盖范围是部分重叠的并集，某个源 404 的文件可能在另一源上存在。
-func probeCandidates(ctx context.Context, id string, extList []string) (cands []Candidate, allRecEvents []warc.RecordEvent, err error) {
+func (a *Archiver) probeCandidates(ctx context.Context, id string, extList []string) (cands []Candidate, allRecEvents []warc.RecordEvent, err error) {
 	for _, srv := range sourceServers {
 		for _, e := range extList {
 			if err := ctx.Err(); err != nil {
@@ -55,7 +55,7 @@ func probeCandidates(ctx context.Context, id string, extList []string) (cands []
 			if err != nil {
 				continue
 			}
-			r, events, err := executeWARCRequest(req, func(*http.Response) error { return nil })
+			r, events, err := a.executeWARCRequest(req, func(*http.Response) error { return nil })
 			allRecEvents = append(allRecEvents, events...)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -100,12 +100,12 @@ func dedupeByETag(cands []Candidate) []Candidate {
 	return out
 }
 
-func download(ctx context.Context, url string) ([]warc.RecordEvent, error) {
-	return downloadWithTimeout(ctx, url, downloadTimeout)
+func (a *Archiver) download(ctx context.Context, url string) ([]warc.RecordEvent, error) {
+	return a.downloadWithTimeout(ctx, url, downloadTimeout)
 }
 
-func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration) ([]warc.RecordEvent, error) {
-	logger.Info("download", zap.String("url", url), zap.Duration("timeout", timeout))
+func (a *Archiver) downloadWithTimeout(ctx context.Context, url string, timeout time.Duration) ([]warc.RecordEvent, error) {
+	a.logger.Info("download", zap.String("url", url), zap.Duration("timeout", timeout))
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -113,7 +113,7 @@ func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration)
 		return nil, err
 	}
 
-	_, recordsEvents, err := executeWARCRequest(req, func(r *http.Response) error {
+	_, recordsEvents, err := a.executeWARCRequest(req, func(r *http.Response) error {
 		if r.StatusCode != http.StatusOK {
 			return fmt.Errorf("http %d", r.StatusCode)
 		}
@@ -121,7 +121,7 @@ func downloadWithTimeout(ctx context.Context, url string, timeout time.Duration)
 		// retain the connection for keepalive reuse.
 		n, err := io.Copy(io.Discard, r.Body)
 		if err == nil {
-			logger.Info("downloaded", zap.String("url", url), zap.Int64("size", n))
+			a.logger.Info("downloaded", zap.String("url", url), zap.Int64("size", n))
 		}
 		return err
 	})

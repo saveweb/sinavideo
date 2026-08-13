@@ -6,17 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"regexp"
+	sinaarchive "sinacloud/internal/archive"
 	"sinacloud/vl"
 	"syscall"
 	"time"
 
 	cannerclient "github.com/saveweb/canner/client"
-	warc "github.com/saveweb/gowarc"
 	"github.com/saveweb/hq/pkg/protocol"
 	"github.com/saveweb/hq/sdk/worker"
 	"go.uber.org/zap"
@@ -31,17 +29,13 @@ func init() {
 	flag.IntVar(&flagMaxJobs, "max-jobs", 0, "maximum jobs to claim before stopping (0 means unlimited)")
 }
 
-var client *warc.CustomHTTPClient
 var logger *zap.Logger
 
 const (
 	HQProject       = "sinavideo"
 	HQClientVersion = "sinavideo/2.4.0"
 
-	userAgent           = "Mozilla/5.0 (compatible; saveweb) sinavideo_archive/020260620"
-	warcOutputDirectory = "warcs"
-	warcTempDirectory   = "temp"
-	uploadLogInterval   = 30 * time.Second
+	uploadLogInterval = 30 * time.Second
 )
 
 var vidPattern = regexp.MustCompile(`^[0-9]+$`)
@@ -178,7 +172,8 @@ func processJob(job *worker.Job, canner *cannerclient.Client, userID, workerID s
 		})
 	}
 
-	warcPath, archiveErr, err := archiveJob(job.Context(), job.JobID, vid, userID, workerID)
+	archiver := sinaarchive.New(logger, sinaarchive.DefaultOutputDirectory, sinaarchive.DefaultTempDirectory)
+	warcPath, archiveErr, err := archiver.ArchiveJob(job.Context(), job.JobID, vid, userID, workerID)
 	if err != nil {
 		logger.Error("failed to create job WARC", zap.Error(err), zap.Int64("job", job.JobID), zap.String("vid", vid))
 		return finishJobFailure(job, worker.Failure{
@@ -242,113 +237,6 @@ func gracefulShutdownContext(logger *zap.Logger) (context.Context, context.Cance
 		signal.Stop(shutdownSignals)
 		cancel()
 	}
-}
-
-func newWARCClientSettings(hostname string, jobID int64, outputDirectory, tempDirectory string) warc.HTTPClientSettings {
-	rotatorSettings := warc.NewRotatorSettings(hostname)
-	rotatorSettings.WarcinfoContent.Set("software", "saveweb_sinavideo_archive/020260620")
-	rotatorSettings.WarcinfoContent.Add("software", "saveweb_gowarc/020260620")
-	rotatorSettings.WarcinfoContent.Set("operator", "saveweb saveweb@saveweb.org")
-	rotatorSettings.WarcinfoContent.Set("http-header-user-agent", userAgent)
-	rotatorSettings.Prefix = fmt.Sprintf("SINA_VIDEO_%d", jobID)
-	rotatorSettings.Compression = warc.CompressionZstd
-	rotatorSettings.WARCSize = math.MaxFloat64
-	rotatorSettings.WARCWriterPoolSize = 1
-	rotatorSettings.OutputDirectory = outputDirectory
-
-	return warc.HTTPClientSettings{
-		RotatorSettings: rotatorSettings,
-		TempDir:         tempDirectory,
-		DNSServers:      []string{"223.5.5.5", "1.1.1.1"},
-		DedupeOptions: warc.DedupeOptions{
-			LocalDedupe:   true,
-			CDXDedupe:     false,
-			SizeThreshold: 1024,
-		},
-		DialTimeout:             10 * time.Second,
-		ResponseHeaderTimeout:   30 * time.Second,
-		ConnReadDeadline:        30 * time.Second,
-		DNSResolutionTimeout:    5 * time.Second,
-		DNSRecordsTTL:           30 * time.Minute,
-		DNSCacheSize:            10000,
-		DecompressBody:          true,
-		FollowRedirects:         true,
-		InsecureSkipVerifyCerts: false,
-		RandomLocalIP:           true,
-		EnableHTTP2:             false,
-		EnableHTTP3:             false,
-		DisableKeepAlives:       false,
-		DigestAlgorithm:         warc.BLAKE3,
-		DefaultUserAgent:        userAgent,
-	}
-}
-
-// archiveJob owns the complete lifecycle of exactly one WARC writer. Disabling
-// size rotation ensures no job can be split across multiple artifact files.
-func archiveJob(ctx context.Context, jobID int64, vid, userID, hostname string) (warcPath string, archiveErr, err error) {
-	return archiveJobTo(ctx, jobID, vid, userID, hostname, warcOutputDirectory, warcTempDirectory)
-}
-
-func archiveJobTo(ctx context.Context, jobID int64, vid, userID, hostname, outputDirectory, tempDirectory string) (warcPath string, archiveErr, err error) {
-	settings := newWARCClientSettings(hostname, jobID, outputDirectory, tempDirectory)
-
-	warcClient, err := warc.NewWARCWritingHTTPClient(settings)
-	if err != nil {
-		return "", nil, err
-	}
-	client = warcClient
-	defer func() { client = nil }()
-
-	records, archiveErr := archive(ctx, vid)
-	outcome := string(protocol.OutcomeSuccess)
-	if archiveErr != nil {
-		outcome = "failed"
-	}
-	metadataErr := writeJobMetadata(warcClient, vid, userID, outcome, records)
-	// Network work obeys ctx, but a canceled lease must not leave an open WARC.
-	// Shutdown waits for already-owned capture work and finalizes the local file.
-	finalizeResult, finalizeErr := warcClient.Shutdown(context.Background())
-	if err := errors.Join(metadataErr, finalizeErr); err != nil {
-		return "", archiveErr, err
-	}
-
-	filenames := finalizeResult.FinalizedFiles
-	if len(filenames) != 1 {
-		return "", archiveErr, fmt.Errorf("job %d produced %d WARC files, want exactly one", jobID, len(filenames))
-	}
-	return filepath.Join(outputDirectory, filenames[0]), archiveErr, nil
-}
-
-func writeJobMetadata(warcClient *warc.CustomHTTPClient, vid, userID, outcome string, records []warc.RecordEvent) error {
-	metadataRecord := warc.NewRecord(warcClient.TempDir)
-	metadataRecord.Header.Set("WARC-Type", "metadata")
-	metadataRecord.Header.Set("WARC-Target-URI", "urn:saveweb:"+HQProject+":"+vid)
-	metadataRecord.Header.Set("Content-Type", "application/warc-fields")
-
-	for _, record := range records {
-		if record.RecordInfo.Header.Get("WARC-Type") == "response" {
-			metadataRecord.Header.Add("WARC-Concurrent-To", record.RecordInfo.Header.Get("WARC-Record-ID"))
-		}
-	}
-	if _, err := metadataRecord.Content.Write([]byte("contributor: " + userID + "\n")); err != nil {
-		return err
-	}
-	if _, err := metadataRecord.Content.Write([]byte("SavewebJobOutcome: " + outcome + "\n")); err != nil {
-		return err
-	}
-
-	recordBatch := warc.NewRecordBatch(nil)
-	recordBatch.Records = append(recordBatch.Records, metadataRecord)
-	// Failure metadata is still useful when ctx was canceled, so finalization
-	// owns this writer operation rather than the request lifecycle.
-	result, err := warcClient.WriteBatch(context.Background(), recordBatch)
-	if err != nil {
-		return err
-	}
-	if len(result.Events) != 1 {
-		return fmt.Errorf("metadata writer returned %d records, want one", len(result.Events))
-	}
-	return nil
 }
 
 func artifactReceipt(receipt cannerclient.Receipt) protocol.ArtifactReceipt {

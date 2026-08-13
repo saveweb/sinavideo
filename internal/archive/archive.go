@@ -1,4 +1,4 @@
-package main
+package archive
 
 import (
 	"context"
@@ -37,13 +37,13 @@ type taggedCandidate struct {
 	ID     string
 }
 
-func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEvent, err error) {
+func (a *Archiver) archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEvent, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
 	log.Printf("=== VID %s ===", vid)
 
-	videoID, recordsIDs, err := getVideoID(ctx, vid)
+	videoID, recordsIDs, err := a.getVideoID(ctx, vid)
 	if err != nil {
 		return allWarcRecEvents, err
 	}
@@ -51,7 +51,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 
 	log.Printf("video_id = %s", videoID)
 
-	info, _, recordsIDs, err := getPlayInfo(ctx, videoID)
+	info, _, recordsIDs, err := a.getPlayInfo(ctx, videoID)
 	allWarcRecEvents = append(allWarcRecEvents, recordsIDs...)
 
 	if err != nil {
@@ -95,7 +95,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 	// 对每个 id 探测「所有源 × 全扩展名」，收集全部 200 命中的候选。
 	var cands []taggedCandidate
 	for id := range known {
-		cs, recs, err := probeCandidates(ctx, id, exts)
+		cs, recs, err := a.probeCandidates(ctx, id, exts)
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if err != nil {
 			return allWarcRecEvents, err
@@ -107,7 +107,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 
 	// ipad_vid 低清整段 MP4 通道：作为 >=6min 分段视频的兜底来源，
 	// 也是不同质量版本，与主档一并存档。只探测 .mp4（低清 MP4 的固定格式）。
-	if ipadVID, recs, ipadErr := getIpadVID(ctx, vid); ipadErr != nil {
+	if ipadVID, recs, ipadErr := a.getIpadVID(ctx, vid); ipadErr != nil {
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if ctx.Err() != nil {
 			return allWarcRecEvents, ipadErr
@@ -116,7 +116,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 	} else {
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if ipadVID != "" && ipadVID != vid && !known[ipadVID] {
-			cs, recs, err := probeCandidates(ctx, ipadVID, []string{"mp4"})
+			cs, recs, err := a.probeCandidates(ctx, ipadVID, []string{"mp4"})
 			allWarcRecEvents = append(allWarcRecEvents, recs...)
 			if err != nil {
 				return allWarcRecEvents, err
@@ -130,7 +130,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 
 	// 失效视频的 WAP 元数据有时仍保留 mp4vid，即使 video_ids.php 返回
 	// ipad_vid=false。该 ID 对应 s3.ivideo.sina.com.cn 上的整段 MP4。
-	if wapInfo, recs, wapErr := getWAPVideoInfo(ctx, vid); wapErr != nil {
+	if wapInfo, recs, wapErr := a.getWAPVideoInfo(ctx, vid); wapErr != nil {
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if ctx.Err() != nil {
 			return allWarcRecEvents, wapErr
@@ -140,7 +140,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		mp4VID := wapInfo.MP4VID
 		if mp4VID != "" && !known[mp4VID] {
-			cs, recs, err := probeCandidates(ctx, mp4VID, []string{"mp4"})
+			cs, recs, err := a.probeCandidates(ctx, mp4VID, []string{"mp4"})
 			allWarcRecEvents = append(allWarcRecEvents, recs...)
 			if err != nil {
 				return allWarcRecEvents, err
@@ -155,7 +155,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 
 	for _, imageURL := range imageURLs {
 		log.Printf("  downloading referenced image %s", imageURL)
-		recs, imageErr := download(ctx, imageURL)
+		recs, imageErr := a.download(ctx, imageURL)
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if imageErr != nil {
 			if errors.Is(imageErr, context.Canceled) || errors.Is(imageErr, context.DeadlineExceeded) {
@@ -182,7 +182,7 @@ func archive(ctx context.Context, vid string) (allWarcRecEvents []warc.RecordEve
 	for u, t := range want {
 		name := fmt.Sprintf("%s.%s", t.ID, t.Ext)
 		log.Printf("  downloading %s (%d bytes)...", name, t.Size)
-		recs, derr := download(ctx, u)
+		recs, derr := a.download(ctx, u)
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if derr != nil {
 			if errors.Is(derr, context.Canceled) || errors.Is(derr, context.DeadlineExceeded) {
