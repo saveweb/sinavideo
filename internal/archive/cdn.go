@@ -31,6 +31,10 @@ func (e *httpStatusError) Error() string {
 	return fmt.Sprintf("http %d", e.code)
 }
 
+func (e *httpStatusError) StatusCode() int {
+	return e.code
+}
+
 // sourceServers 按探测/下载优先级排列。三个入口共享部分数据（同 vid 三源都命中时 ETag 一致），
 // 但各自都有独占文件——批量测试（72 样本 × 3 源 × 3 ext）显示 s3.ivideo / edge.ivideo /
 // edge.v.iask 都存在"只有自己命中、另两个 404"的文件。因此必须探测全部源以保证召回率。

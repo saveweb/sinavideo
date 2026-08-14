@@ -18,7 +18,7 @@ import (
 
 const (
 	Project        = "sinavideo"
-	clientVersion  = "sinavideo/1.4.3"
+	clientVersion  = "sinavideo/1.4.4"
 	finishTimeout  = 30 * time.Second
 	uploadInterval = 30 * time.Second
 )
@@ -104,7 +104,11 @@ func processJob(job *hqworker.Job, canner *cannerclient.Client, userID, workerID
 		return finishJobFailure(job, retryableFailure("warc_failed", err), logger)
 	}
 	if archiveErr != nil {
-		logger.Error("failed to archive job", zap.Error(archiveErr), zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath))
+		fields := []zap.Field{zap.Error(archiveErr), zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath)}
+		if code, ok := errorStatusCode(archiveErr); ok {
+			fields = append(fields, zap.Int("status_code", code))
+		}
+		logger.Error("failed to archive job", fields...)
 		err := finishJobFailure(job, retryableFailure("archive_failed", archiveErr), logger)
 		removeJobWARC(warcPath, job.JobID, logger)
 		return err
@@ -132,7 +136,19 @@ func processJob(job *hqworker.Job, canner *cannerclient.Client, userID, workerID
 }
 
 func retryableFailure(code string, err error) hqworker.Failure {
-	return hqworker.Failure{Retryable: true, Error: protocol.ExecutionError{Code: code, Message: err.Error(), Details: protocol.Attrs{}}}
+	details := protocol.Attrs{}
+	if statusCode, ok := errorStatusCode(err); ok {
+		details["status_code"] = statusCode
+	}
+	return hqworker.Failure{Retryable: true, Error: protocol.ExecutionError{Code: code, Message: err.Error(), Details: details}}
+}
+
+func errorStatusCode(err error) (int, bool) {
+	var statusErr interface{ StatusCode() int }
+	if !errors.As(err, &statusErr) {
+		return 0, false
+	}
+	return statusErr.StatusCode(), true
 }
 
 func fileSize(path string) (int64, error) {

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,13 @@ import (
 	"github.com/saveweb/hq/pkg/protocol"
 	"go.uber.org/zap"
 )
+
+type testStatusError struct {
+	code int
+}
+
+func (e *testStatusError) Error() string   { return fmt.Sprintf("http %d", e.code) }
+func (e *testStatusError) StatusCode() int { return e.code }
 
 func TestArtifactReceipt(t *testing.T) {
 	want := protocol.ArtifactReceipt{
@@ -36,4 +44,11 @@ func TestRemoveJobWARC(t *testing.T) {
 		t.Fatalf("WARC still exists after cleanup: %v", err)
 	}
 	removeJobWARC(warcPath, 42, zap.NewNop())
+}
+
+func TestRetryableFailureIncludesStatusCode(t *testing.T) {
+	failure := retryableFailure("archive_failed", fmt.Errorf("get video id: %w", &testStatusError{code: 418}))
+	if got := failure.Error.Details["status_code"]; got != 418 {
+		t.Fatalf("status_code = %v, want 418", got)
+	}
 }

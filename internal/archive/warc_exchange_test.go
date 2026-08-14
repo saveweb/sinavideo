@@ -151,6 +151,26 @@ func TestReadWARCURLTimeout(t *testing.T) {
 	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)
 }
 
+func TestReadWARCURLRejectsHTTPStatus(t *testing.T) {
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		w.WriteHeader(stdhttp.StatusTeapot)
+		_, _ = io.WriteString(w, "418 I'm a teapot")
+	}))
+	defer server.Close()
+	warcClient, outputDirectory := installTestWARCClient(t)
+
+	_, events, err := newTestArchiver(t, warcClient).readWARCURLWithTimeout(t.Context(), server.URL, time.Second)
+	var statusErr *httpStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("readWARCURL error = %v, want httpStatusError", err)
+	}
+	if got := statusErr.StatusCode(); got != stdhttp.StatusTeapot {
+		t.Fatalf("status code = %d, want %d", got, stdhttp.StatusTeapot)
+	}
+	assertHTTPRecordEvents(t, events, false)
+	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)
+}
+
 func installTestWARCClient(t *testing.T) (*warc.CustomHTTPClient, string) {
 	t.Helper()
 	outputDirectory := t.TempDir()

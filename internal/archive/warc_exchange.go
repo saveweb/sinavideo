@@ -47,6 +47,9 @@ func (a *Archiver) readWARCURLWithTimeout(ctx context.Context, url string, timeo
 	_, events, err := a.executeWARCRequest(req, func(response *http.Response) error {
 		var readErr error
 		body, readErr = io.ReadAll(response.Body)
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return errors.Join(readErr, &httpStatusError{code: response.StatusCode})
+		}
 		return readErr
 	})
 	return body, events, err
