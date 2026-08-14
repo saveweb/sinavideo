@@ -1,6 +1,5 @@
 services:
   saveweb_archivesinavideo:
-    build: .
     image: git.saveweb.org/saveweb/sinavideo:latest
     restart: unless-stopped
     stop_grace_period: 2m
