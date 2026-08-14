@@ -5,10 +5,10 @@ services:
     stop_grace_period: 2m
     environment:
       HQ_MACHINE_TOKEN: "hq_xxxxx"
-    volumes:
-      - warcs:/app/warcs
-      - temp:/app/temp
+#     volumes:
+#       - warcs:/app/warcs
+#       - temp:/app/temp
 
-volumes:
-  warcs:
-  temp:
+# volumes:
+#   warcs:
+#   temp:
