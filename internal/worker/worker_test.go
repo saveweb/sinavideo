@@ -1,11 +1,13 @@
 package worker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	cannerclient "github.com/saveweb/canner/client"
 	"github.com/saveweb/hq/pkg/protocol"
@@ -50,5 +52,52 @@ func TestRetryableFailureIncludesStatusCode(t *testing.T) {
 	failure := retryableFailure("archive_failed", fmt.Errorf("get video id: %w", &testStatusError{code: 418}))
 	if got := failure.Error.Details["status_code"]; got != 418 {
 		t.Fatalf("status_code = %v, want 418", got)
+	}
+}
+
+func TestUploadJobWARCWithRetryEventuallySucceeds(t *testing.T) {
+	want := cannerclient.Receipt{ID: "receipt-1"}
+	attempts := 0
+	got, err := uploadJobWARCWithRetry(t.Context(), func(context.Context) (cannerclient.Receipt, error) {
+		attempts++
+		if attempts < 3 {
+			return cannerclient.Receipt{}, errors.New("temporary upload failure")
+		}
+		return want, nil
+	}, func(int) time.Duration { return 0 }, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want || attempts != 3 {
+		t.Fatalf("receipt = %+v, attempts = %d; want %+v after 3 attempts", got, attempts, want)
+	}
+}
+
+func TestUploadJobWARCWithRetryStopsDuringBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(t.Context())
+	wantErr := errors.New("lease lost")
+	uploaded := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := uploadJobWARCWithRetry(ctx, func(context.Context) (cannerclient.Receipt, error) {
+			close(uploaded)
+			return cannerclient.Receipt{}, errors.New("temporary upload failure")
+		}, func(int) time.Duration { return time.Hour }, zap.NewNop())
+		done <- err
+	}()
+	<-uploaded
+	cancel(wantErr)
+	if err := <-done; !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestUploadRetryBackoff(t *testing.T) {
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, time.Minute, time.Minute}
+	attempts := []int{1, 2, 3, 7, 100}
+	for i, attempt := range attempts {
+		if got := uploadRetryBackoff(attempt); got != want[i] {
+			t.Fatalf("uploadRetryBackoff(%d) = %s, want %s", attempt, got, want[i])
+		}
 	}
 }

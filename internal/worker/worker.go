@@ -18,9 +18,11 @@ import (
 
 const (
 	Project        = "sinavideo"
-	clientVersion  = "sinavideo/1.4.4"
+	clientVersion  = "sinavideo/1.4.5"
 	finishTimeout  = 30 * time.Second
 	uploadInterval = 30 * time.Second
+	uploadRetryMin = time.Second
+	uploadRetryMax = time.Minute
 )
 
 var vidPattern = regexp.MustCompile(`^[0-9]+$`)
@@ -116,7 +118,7 @@ func processJob(job *hqworker.Job, canner *cannerclient.Client, userID, workerID
 
 	warcSize, _ := fileSize(warcPath)
 	logger.Info("uploading job WARC to canner", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath), zap.Int64("size", warcSize))
-	receipt, err := canner.UploadFileWithProgressToStdout(job.Context(), Project, warcPath, uploadInterval)
+	receipt, err := uploadJobWARC(job.Context(), canner, job.JobID, warcPath, logger)
 	if err != nil {
 		logger.Error("failed to upload job WARC to canner", zap.Error(err), zap.Int64("job", job.JobID), zap.String("warc", warcPath))
 		return finishJobFailure(job, retryableFailure("artifact_upload_failed", err), logger)
@@ -133,6 +135,50 @@ func processJob(job *hqworker.Job, canner *cannerclient.Client, userID, workerID
 	}
 	logger.Info("completed HQ job", zap.Int64("job", job.JobID), zap.String("vid", vid), zap.String("warc", warcPath), zap.String("receipt", receipt.ID))
 	return nil
+}
+
+func uploadJobWARC(ctx context.Context, canner *cannerclient.Client, jobID int64, warcPath string, logger *zap.Logger) (cannerclient.Receipt, error) {
+	logger = logger.With(zap.Int64("job", jobID), zap.String("warc", warcPath))
+	return uploadJobWARCWithRetry(ctx, func(ctx context.Context) (cannerclient.Receipt, error) {
+		return canner.UploadFileWithProgressToStdout(ctx, Project, warcPath, uploadInterval)
+	}, uploadRetryBackoff, logger)
+}
+
+func uploadJobWARCWithRetry(ctx context.Context, upload func(context.Context) (cannerclient.Receipt, error), backoff func(int) time.Duration, logger *zap.Logger) (cannerclient.Receipt, error) {
+	for attempt := 1; ; attempt++ {
+		receipt, err := upload(ctx)
+		if err == nil {
+			return receipt, nil
+		}
+		if ctx.Err() != nil {
+			return cannerclient.Receipt{}, context.Cause(ctx)
+		}
+
+		delay := backoff(attempt)
+		logger.Warn("failed to upload job WARC to canner, retrying",
+			zap.Error(err),
+			zap.Int("retry_attempt", attempt),
+			zap.Int64("retry_in_seconds", int64(delay/time.Second)),
+			zap.Duration("backoff", delay),
+		)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return cannerclient.Receipt{}, context.Cause(ctx)
+		case <-timer.C:
+		}
+	}
+}
+
+func uploadRetryBackoff(attempt int) time.Duration {
+	delay := uploadRetryMin
+	for i := 1; i < attempt && delay < uploadRetryMax; i++ {
+		delay *= 2
+	}
+	return min(delay, uploadRetryMax)
 }
 
 func retryableFailure(code string, err error) hqworker.Failure {
