@@ -5,8 +5,45 @@ https://wiki.saveweb.org/sinavideo
 1. Go to https://hq.saveweb.org/ to register.
 2. Leave a message in our group so we can activate your account. (TG: https://t.me/saveweb_chat, IRC: stwp-chat:hackint.org, Matrix: #saveweb_chat:matrix.org)
 3. Once your account is activated, create a machine token on the HQ.
-4. Set your `HQ_MACHINE_TOKEN` in `compose.yml`.
-5. Run `docker compose up -d`.
+
+4. (Optional but recommended) Use Watchtower to automatically update our containers:
+
+```bash
+sudo docker rm -f watchtower
+sudo docker run -d \
+  -v /var/run/docker.sock:/var/run/docker.sock  \
+  -e 'WATCHTOWER_CLEANUP=true' \
+  -e 'WATCHTOWER_POLL_INTERVAL=3600' \
+  -e 'WATCHTOWER_INCLUDE_STOPPED=true' \
+  -e 'WATCHTOWER_REVIVE_STOPPED=true' \
+  -e 'WATCHTOWER_LABEL_ENABLE=true'   \
+  --name watchtower --restart unless-stopped \
+  dhm.saveweb.org/nickfedor/watchtower
+```
+
+5. Set `HQ_MACHINE_TOKEN` and start the container
+
+```bash
+export HQ_MACHINE_TOKEN=      # Set Your HQ_MACHINE_TOKEN HERE !!!!
+```
+
+```bash
+if [[ -z "$HQ_MACHINE_TOKEN" ]]; then
+    echo "WARN: HQ_MACHINE_TOKEN must be set"
+    exit 1
+fi
+
+docker run -d \
+  --name saveweb_archivesinavideo \
+  --restart unless-stopped \
+  --stop-timeout 120 \
+  --log-driver json-file \
+  --log-opt max-size=50m \
+  --label=com.centurylinklabs.watchtower.enable=true \
+  -e HQ_MACHINE_TOKEN="$HQ_MACHINE_TOKEN" \
+  git.saveweb.org/saveweb/sinavideo:latest
+```
+
 
 ## Notes
 
