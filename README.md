@@ -21,11 +21,14 @@ sudo docker run -d \
   dhm.saveweb.org/nickfedor/watchtower
 ```
 
-5. Set `HQ_MACHINE_TOKEN` and start the container
+5. Set `HQ_MACHINE_TOKEN`
 
 ```bash
-export HQ_MACHINE_TOKEN=      # Set Your HQ_MACHINE_TOKEN HERE !!!!
+curl -fsSL https://hq.saveweb.org/auth/machine-token.sh | bash # The HQ_MACHINE_TOKEN will be automatically set in the child bash process.
 ```
+or if you do not like to run unknown script, you can set the environment variables yourself.
+
+6. Run the warrior
 
 ```bash
 if [[ -z "$HQ_MACHINE_TOKEN" ]]; then
@@ -33,7 +36,8 @@ if [[ -z "$HQ_MACHINE_TOKEN" ]]; then
     exit 1
 fi
 
-docker run -d \
+sudo docker rm -f saveweb_archivesinavideo
+sudo docker run -d \
   --name saveweb_archivesinavideo \
   --restart unless-stopped \
   --stop-timeout 120 \
