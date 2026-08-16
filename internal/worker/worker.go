@@ -18,7 +18,7 @@ import (
 
 const (
 	Project        = "sinavideo"
-	clientVersion  = "sinavideo/1.4.5"
+	clientVersion  = "sinavideo/1.4.6"
 	finishTimeout  = 30 * time.Second
 	uploadInterval = 30 * time.Second
 	uploadRetryMin = time.Second
@@ -54,7 +54,7 @@ func Run(ctx context.Context, baseLogger *zap.Logger, maxJobs int) error {
 	logger = baseLogger.With(zap.Dict("_stream", zap.String("project", Project), zap.String("gh", userID), zap.String("worker_id", queue.WorkerID())))
 	undoStdLog = zap.RedirectStdLog(logger)
 	defer undoStdLog()
-	logger.Info("connected to HQ", zap.String("worker_id", queue.WorkerID()), zap.String("project", Project))
+	logger.Info("connected to HQ", zap.String("worker_id", queue.WorkerID()), zap.String("project", Project), zap.String("client_version", clientVersion))
 
 	return claimJobs(ctx, queue, canner, userID, maxJobs, logger)
 }
