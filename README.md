@@ -16,6 +16,7 @@ sudo docker run -d \
   -e 'WATCHTOWER_POLL_INTERVAL=3600' \
   -e 'WATCHTOWER_INCLUDE_STOPPED=true' \
   -e 'WATCHTOWER_REVIVE_STOPPED=true' \
+  -e 'WATCHTOWER_UPDATE_ON_START=true' \
   -e 'WATCHTOWER_LABEL_ENABLE=true'   \
   --name watchtower --restart unless-stopped \
   dhm.saveweb.org/nickfedor/watchtower
