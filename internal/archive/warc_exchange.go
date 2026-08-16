@@ -12,24 +12,25 @@ import (
 
 const apiRequestTimeout = 2 * time.Minute
 
-// executeWARCRequest waits for durable archival even when the request is
-// canceled. The request context stops network I/O; Wait finishes only capture
-// work that the transport already owns.
+// executeWARCRequest commits every attempted exchange, including non-2xx and
+// truncated responses. The request context stops network I/O; Commit finishes
+// only capture work that the transport already owns.
 func (a *Archiver) executeWARCRequest(req *http.Request, consume func(*http.Response) error) (*http.Response, []warc.RecordEvent, error) {
 	exchange, err := a.client.Start(req)
+	if exchange == nil {
+		return nil, nil, err
+	}
+	defer exchange.Discard(context.Background())
 	if err != nil {
-		if exchange == nil {
-			return nil, nil, err
-		}
-		result, archiveErr := exchange.Wait(context.Background())
-		return exchange.Response, result.Records, errors.Join(err, archiveErr)
+		result, commitErr := exchange.Commit(context.Background())
+		return exchange.Response, result.Records, commitErr
 	}
 
 	response := exchange.Response
 	consumeErr := consume(response)
 	closeErr := response.Body.Close()
-	result, archiveErr := exchange.Wait(context.Background())
-	return response, result.Records, errors.Join(consumeErr, closeErr, archiveErr)
+	result, commitErr := exchange.Commit(context.Background())
+	return response, result.Records, errors.Join(consumeErr, closeErr, commitErr)
 }
 
 func (a *Archiver) readWARCURL(ctx context.Context, url string) ([]byte, []warc.RecordEvent, error) {

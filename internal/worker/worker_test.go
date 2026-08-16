@@ -12,6 +12,7 @@ import (
 	cannerclient "github.com/saveweb/canner/client"
 	"github.com/saveweb/hq/pkg/protocol"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type testStatusError struct {
@@ -36,16 +37,33 @@ func TestArtifactReceipt(t *testing.T) {
 	}
 }
 
+func TestJobLoggerAddsTraceFields(t *testing.T) {
+	core, observed := observer.New(zap.InfoLevel)
+	jobLogger(zap.New(core), 42, "58494163").Info("test")
+
+	entries := observed.All()
+	if len(entries) != 1 {
+		t.Fatalf("log entries = %d, want 1", len(entries))
+	}
+	fields := entries[0].ContextMap()
+	if fields["job"] != int64(42) {
+		t.Fatalf("job field = %#v, want 42", fields["job"])
+	}
+	if fields["vid"] != "58494163" {
+		t.Fatalf("vid field = %#v, want 58494163", fields["vid"])
+	}
+}
+
 func TestRemoveJobWARC(t *testing.T) {
 	warcPath := filepath.Join(t.TempDir(), "job.warc.zst")
 	if err := os.WriteFile(warcPath, []byte("warc"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	removeJobWARC(warcPath, 42, zap.NewNop())
+	removeJobWARC(warcPath, zap.NewNop())
 	if _, err := os.Stat(warcPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("WARC still exists after cleanup: %v", err)
 	}
-	removeJobWARC(warcPath, 42, zap.NewNop())
+	removeJobWARC(warcPath, zap.NewNop())
 }
 
 func TestRetryableFailureIncludesStatusCode(t *testing.T) {

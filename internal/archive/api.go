@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 
 	warc "github.com/saveweb/gowarc"
+	"go.uber.org/zap"
 )
 
 // var client = &http.Client{Timeout: 30 * time.Second}
@@ -42,7 +42,7 @@ type VideoFile struct {
 // getvideoidbyvid
 func (a *Archiver) getVideoID(ctx context.Context, vid string) (string, []warc.RecordEvent, error) {
 	url := "https://s.video.sina.com.cn/video/getvideoidbyvid?vid=" + vid
-	log.Println("getVideoID", url)
+	a.logger.Info("getVideoID", zap.String("url", url))
 	bodyBytes, recordsEvents, err := a.readWARCURL(ctx, url)
 	if err != nil {
 		return "", recordsEvents, err
@@ -54,7 +54,7 @@ func (a *Archiver) getVideoID(ctx context.Context, vid string) (string, []warc.R
 		return "", recordsEvents, errors.Join(err, fmt.Errorf("unmarshal vid resp: %s", string(bodyBytes)))
 	}
 	if v.Code == 0 {
-		return "", recordsEvents, fmt.Errorf("vid %s not found in api", vid)
+		return "", recordsEvents, &sourceUnavailableError{source: "video ID", message: fmt.Sprintf("vid %s not found in API", vid)}
 	}
 	if v.Code != 1 {
 		return "", recordsEvents, fmt.Errorf("expected code 1, got %d, message: %s", v.Code, v.Message)
@@ -89,12 +89,26 @@ type WAPVideoInfo struct {
 	Image  string `json:"image"`
 }
 
+type sourceUnavailableError struct {
+	source  string
+	message string
+}
+
+func (e *sourceUnavailableError) Error() string {
+	return e.source + " unavailable: " + e.message
+}
+
+func isSourceUnavailable(err error) bool {
+	var unavailable *sourceUnavailableError
+	return errors.As(err, &unavailable)
+}
+
 // getIpadVID 通过 vid 查询对应的 ipad_vid（低清整段 MP4 的 ID）。
 // 返回的 ipadVID 在「该视频没有转码低清版（ipad_vid 为 false）」时返回空字符串与 nil error。
 // 视频时长 >6min 且被分段时，主 VID 拿不到原档，此时 ipad_vid 对应的低清 MP4 是 fallback 来源。
 func (a *Archiver) getIpadVID(ctx context.Context, vid string) (string, []warc.RecordEvent, error) {
 	url := "http://video.sina.com.cn/interface/video_ids/video_ids.php?v=" + vid
-	log.Println("getIpadVID", url)
+	a.logger.Info("getIpadVID", zap.String("url", url))
 	bodyBytes, recordsEvents, err := a.readWARCURL(ctx, url)
 	if err != nil {
 		return "", recordsEvents, err
@@ -124,7 +138,7 @@ func parseWAPVideoInfo(raw []byte) (WAPVideoInfo, error) {
 		return WAPVideoInfo{}, errors.Join(err, fmt.Errorf("unmarshal WAP video info resp: %s", string(raw)))
 	}
 	if resp.Code != 1 {
-		return WAPVideoInfo{}, fmt.Errorf("WAP video info error, expected code 1, got %d, message: %s", resp.Code, resp.Message)
+		return WAPVideoInfo{}, &sourceUnavailableError{source: "WAP video info", message: fmt.Sprintf("expected code 1, got %d, message: %s", resp.Code, resp.Message)}
 	}
 
 	var info WAPVideoInfo
@@ -138,7 +152,7 @@ func parseWAPVideoInfo(raw []byte) (WAPVideoInfo, error) {
 // expose a playable MP4 and thumbnail only here even when the play API fails.
 func (a *Archiver) getWAPVideoInfo(ctx context.Context, vid string) (WAPVideoInfo, []warc.RecordEvent, error) {
 	url := "https://interface.sina.cn/video/wap/videoinfo.d.json?vid=" + vid
-	log.Println("getWAPVideoInfo", url)
+	a.logger.Info("getWAPVideoInfo", zap.String("url", url))
 	raw, recordsEvents, err := a.readWARCURL(ctx, url)
 	if err != nil {
 		return WAPVideoInfo{}, recordsEvents, err
@@ -149,7 +163,7 @@ func (a *Archiver) getWAPVideoInfo(ctx context.Context, vid string) (WAPVideoInf
 
 func (a *Archiver) getPlayInfo(ctx context.Context, videoID string) (*PlayData, json.RawMessage, []warc.RecordEvent, error) {
 	url := "http://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id=" + videoID
-	log.Println("getPlayInfo", url)
+	a.logger.Info("getPlayInfo", zap.String("url", url))
 
 	raw, recordsEvents, err := a.readWARCURL(ctx, url)
 	if err != nil {
@@ -162,7 +176,7 @@ func (a *Archiver) getPlayInfo(ctx context.Context, videoID string) (*PlayData, 
 	}
 	switch p.Code {
 	case 0:
-		return nil, raw, recordsEvents, fmt.Errorf("play api error, expected code 1, got %d, message: %s", p.Code, p.Message)
+		return nil, raw, recordsEvents, &sourceUnavailableError{source: "play API", message: fmt.Sprintf("expected code 1, got %d, message: %s", p.Code, p.Message)}
 	case 1:
 		var data PlayData
 		if err := json.Unmarshal(p.Data, &data); err != nil {

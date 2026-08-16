@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -17,9 +16,10 @@ import (
 
 var exts = []string{"mp4", "flv", "hlv"}
 
-const downloadTimeout = 30 * time.Minute
+const downloadTimeout = 60 * time.Minute
 
 const mediaDownloadAttempts = 3
+const probeAttempts = 3
 
 var mediaDownloadBackoff = [...]time.Duration{time.Second, 3 * time.Second}
 
@@ -33,6 +33,43 @@ func (e *httpStatusError) Error() string {
 
 func (e *httpStatusError) StatusCode() int {
 	return e.code
+}
+
+func statusCode(err error) (int, bool) {
+	var statusErr interface{ StatusCode() int }
+	if !errors.As(err, &statusErr) {
+		return 0, false
+	}
+	return statusErr.StatusCode(), true
+}
+
+func isHTTPStatus(err error, codes ...int) bool {
+	code, ok := statusCode(err)
+	if !ok {
+		return false
+	}
+	for _, candidate := range codes {
+		if code == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldRetryDownload(err error) bool {
+	code, ok := statusCode(err)
+	if !ok {
+		return true
+	}
+	return code == http.StatusNotFound || code == http.StatusRequestTimeout || code == http.StatusTooManyRequests || code >= 500
+}
+
+func shouldRetryProbe(err error) bool {
+	code, ok := statusCode(err)
+	if !ok {
+		return true
+	}
+	return code == http.StatusRequestTimeout || code == http.StatusTooManyRequests || code >= 500
 }
 
 // sourceServers 按探测/下载优先级排列。三个入口共享部分数据（同 vid 三源都命中时 ETag 一致），
@@ -67,54 +104,51 @@ func (a *Archiver) probeCandidates(ctx context.Context, id string, extList []str
 				return cands, allRecEvents, context.Cause(ctx)
 			}
 			u := fmt.Sprintf(srv, id, e)
-			log.Println("probe", u)
-			req, err := http.NewRequestWithContext(ctx, "HEAD", u, nil)
-			if err != nil {
-				continue
-			}
-			r, events, err := a.executeWARCRequest(req, func(*http.Response) error { return nil })
-			allRecEvents = append(allRecEvents, events...)
-			if err != nil {
-				if ctx.Err() != nil {
+			a.logger.Info("probe", zap.String("url", u))
+			for attempt := 1; attempt <= probeAttempts; attempt++ {
+				req, err := http.NewRequestWithContext(ctx, http.MethodHead, u, nil)
+				if err != nil {
 					return cands, allRecEvents, err
 				}
-				continue
-			}
-			if r.StatusCode == 200 {
-				x_sz, _ := strconv.ParseInt(r.Header.Get("X-Filesize"), 10, 64)
-				cl_sz, _ := strconv.ParseInt(r.Header.Get("Content-Length"), 10, 64)
-				cands = append(cands, Candidate{
-					URL:  u,
-					Ext:  e,
-					Size: max(x_sz, cl_sz),
-					ETag: strings.TrimSpace(r.Header.Get("ETag")),
-				})
+				r, events, requestErr := a.executeWARCRequest(req, func(*http.Response) error { return nil })
+				allRecEvents = append(allRecEvents, events...)
+				if requestErr == nil {
+					switch r.StatusCode {
+					case http.StatusOK:
+						xSize, _ := strconv.ParseInt(r.Header.Get("X-Filesize"), 10, 64)
+						contentLength, _ := strconv.ParseInt(r.Header.Get("Content-Length"), 10, 64)
+						cands = append(cands, Candidate{URL: u, Ext: e, Size: max(xSize, contentLength), ETag: strings.TrimSpace(r.Header.Get("ETag"))})
+						requestErr = nil
+					case http.StatusNotFound:
+						requestErr = nil
+					default:
+						requestErr = &httpStatusError{code: r.StatusCode}
+					}
+				}
+				if requestErr == nil {
+					break
+				}
+				if ctx.Err() != nil {
+					return cands, allRecEvents, context.Cause(ctx)
+				}
+				if attempt == probeAttempts || !shouldRetryProbe(requestErr) {
+					return cands, allRecEvents, fmt.Errorf("probe %s failed after %d attempt(s): %w", u, attempt, requestErr)
+				}
+				delay := mediaDownloadBackoff[attempt-1]
+				a.logger.Warn("probe failed, retrying", zap.String("url", u), zap.Int("attempt", attempt), zap.Int("max_attempts", probeAttempts), zap.Duration("backoff", delay), zap.Error(requestErr))
+				timer := time.NewTimer(delay)
+				select {
+				case <-ctx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return cands, allRecEvents, context.Cause(ctx)
+				case <-timer.C:
+				}
 			}
 		}
 	}
 	return cands, allRecEvents, nil
-}
-
-// dedupeByETag 把指向同一内容（ETag 相同）的候选合并为一次下载。
-// 三个源共享大量数据，同一文件通常能通过 3 个 URL 访问且 ETag 一致；按 ETag 去重即可
-// 在最大化覆盖率的同时避免重复字节/请求。没有 ETag 的候选无法匹配，各自保留（宁可多下也不漏）。
-func dedupeByETag(cands []Candidate) []Candidate {
-	seen := map[string]bool{}
-	var out []Candidate
-	for _, c := range cands {
-		key := c.ETag
-		if key == "" {
-			// 无 ETag → 视为每个 URL 独立内容，保留
-			key = "\x00" + c.URL
-		}
-		if seen[key] {
-			log.Printf("  dedupe skip %s (etag=%s)", c.URL, c.ETag)
-			continue
-		}
-		seen[key] = true
-		out = append(out, c)
-	}
-	return out
 }
 
 func (a *Archiver) download(ctx context.Context, url string) ([]warc.RecordEvent, error) {
@@ -126,15 +160,16 @@ func (a *Archiver) download(ctx context.Context, url string) ([]warc.RecordEvent
 func (a *Archiver) downloadWithRetry(ctx context.Context, url string, timeout time.Duration, attempts int, backoff func(int) time.Duration) ([]warc.RecordEvent, error) {
 	var allRecordEvents []warc.RecordEvent
 	var lastErr error
+	attemptsMade := 0
 	for attempt := 1; attempt <= attempts; attempt++ {
+		attemptsMade = attempt
 		recordEvents, err := a.downloadWithTimeout(ctx, url, timeout)
 		allRecordEvents = append(allRecordEvents, recordEvents...)
 		if err == nil {
 			return allRecordEvents, nil
 		}
 		lastErr = err
-		var statusErr *httpStatusError
-		if ctx.Err() != nil || errors.As(err, &statusErr) || attempt == attempts {
+		if ctx.Err() != nil || !shouldRetryDownload(err) || attempt == attempts {
 			break
 		}
 
@@ -150,7 +185,7 @@ func (a *Archiver) downloadWithRetry(ctx context.Context, url string, timeout ti
 		case <-timer.C:
 		}
 	}
-	return allRecordEvents, fmt.Errorf("download %s failed after %d attempt(s): %w", url, attempts, lastErr)
+	return allRecordEvents, fmt.Errorf("download %s failed after %d attempt(s): %w", url, attemptsMade, lastErr)
 }
 
 func (a *Archiver) downloadWithTimeout(ctx context.Context, url string, timeout time.Duration) ([]warc.RecordEvent, error) {

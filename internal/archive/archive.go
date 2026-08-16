@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 
 	warc "github.com/saveweb/gowarc"
+	"go.uber.org/zap"
 )
 
 type FileRef struct {
@@ -41,27 +41,38 @@ func (a *Archiver) archive(ctx context.Context, vid string) (allWarcRecEvents []
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
-	log.Printf("=== VID %s ===", vid)
+	a.logger.Info("started VID archive")
 
 	videoID, recordsIDs, err := a.getVideoID(ctx, vid)
-	if err != nil {
-		return allWarcRecEvents, err
-	}
 	allWarcRecEvents = append(allWarcRecEvents, recordsIDs...)
-
-	log.Printf("video_id = %s", videoID)
-
-	info, _, recordsIDs, err := a.getPlayInfo(ctx, videoID)
-	allWarcRecEvents = append(allWarcRecEvents, recordsIDs...)
-
 	if err != nil {
 		if ctx.Err() != nil {
 			return allWarcRecEvents, err
 		}
-		log.Printf("  play api failed: %v, trying sources directly", err)
-		info = &PlayData{}
+		if !isSourceUnavailable(err) && !isHTTPStatus(err, 404) {
+			return allWarcRecEvents, err
+		}
+		a.logger.Info("video ID unavailable; continuing with VID-based sources", zap.Error(err))
 	} else {
-		log.Printf("  title = %q  length = %s", info.Title, info.Length)
+		a.logger.Info("resolved video ID", zap.String("video_id", videoID))
+	}
+
+	info := &PlayData{}
+	if videoID != "" {
+		playInfo, _, playRecords, playErr := a.getPlayInfo(ctx, videoID)
+		allWarcRecEvents = append(allWarcRecEvents, playRecords...)
+		if playErr != nil {
+			if ctx.Err() != nil {
+				return allWarcRecEvents, playErr
+			}
+			if !isSourceUnavailable(playErr) && !isHTTPStatus(playErr, 400, 404) {
+				return allWarcRecEvents, playErr
+			}
+			a.logger.Info("play API unavailable; trying sources directly", zap.Error(playErr))
+		} else {
+			info = playInfo
+			a.logger.Info("loaded play metadata", zap.String("title", info.Title), zap.String("length", info.Length))
+		}
 	}
 
 	meta := Meta{
@@ -75,7 +86,6 @@ func (a *Archiver) archive(ctx context.Context, vid string) (allWarcRecEvents []
 	}
 
 	var imageURLs []string
-	var mediaDownloadErrs []error
 	seenImageURLs := map[string]bool{}
 	addImageURL := func(u string) {
 		if u != "" && !seenImageURLs[u] {
@@ -113,7 +123,10 @@ func (a *Archiver) archive(ctx context.Context, vid string) (allWarcRecEvents []
 		if ctx.Err() != nil {
 			return allWarcRecEvents, ipadErr
 		}
-		log.Printf("  ipad_vid lookup failed: %v", ipadErr)
+		if !isHTTPStatus(ipadErr, 404) {
+			return allWarcRecEvents, ipadErr
+		}
+		a.logger.Info("ipad_vid unavailable", zap.Error(ipadErr))
 	} else {
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if ipadVID != "" && ipadVID != vid && !known[ipadVID] {
@@ -136,7 +149,10 @@ func (a *Archiver) archive(ctx context.Context, vid string) (allWarcRecEvents []
 		if ctx.Err() != nil {
 			return allWarcRecEvents, wapErr
 		}
-		log.Printf("  WAP video info lookup failed: %v", wapErr)
+		if !isSourceUnavailable(wapErr) && !isHTTPStatus(wapErr, 404) {
+			return allWarcRecEvents, wapErr
+		}
+		a.logger.Info("WAP video info unavailable", zap.Error(wapErr))
 	} else {
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		mp4VID := wapInfo.MP4VID
@@ -155,57 +171,79 @@ func (a *Archiver) archive(ctx context.Context, vid string) (allWarcRecEvents []
 	}
 
 	for _, imageURL := range imageURLs {
-		log.Printf("  downloading referenced image %s", imageURL)
+		a.logger.Info("downloading referenced image", zap.String("url", imageURL))
 		recs, imageErr := a.download(ctx, imageURL)
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
 		if imageErr != nil {
 			if errors.Is(imageErr, context.Canceled) || errors.Is(imageErr, context.DeadlineExceeded) {
 				return allWarcRecEvents, imageErr
 			}
-			log.Printf("  referenced image download failed: %v", imageErr)
-		}
-	}
-
-	// ETag 去重：三个源共享大量数据，同一文件常能通过多个 URL 访问且 ETag 一致；
-	// 按 ETag 去重后在最大化覆盖率的同时避免重复下载同一字节。
-	// 注意 main 与 ipad 的 ETag 必然不同（不同质量版本），不会被互相去重。
-	uniq := dedupeByETag(untag(cands))
-	want := map[string]taggedCandidate{} // url -> tag
-	for _, c := range uniq {
-		for _, t := range cands {
-			if t.URL == c.URL {
-				want[t.URL] = t
-				break
+			if !isHTTPStatus(imageErr, 404) {
+				return allWarcRecEvents, imageErr
 			}
+			a.logger.Info("referenced image unavailable", zap.String("url", imageURL), zap.Error(imageErr))
 		}
 	}
 
-	for u, t := range want {
-		name := fmt.Sprintf("%s.%s", t.ID, t.Ext)
-		log.Printf("  downloading %s (%d bytes)...", name, t.Size)
-		recs, derr := a.download(ctx, u)
+	for _, group := range a.groupCandidatesByETag(cands) {
+		primary := group[0]
+		name := fmt.Sprintf("%s.%s", primary.ID, primary.Ext)
+		recs, savedURL, downloadErr := a.downloadCandidateGroup(ctx, name, group)
 		allWarcRecEvents = append(allWarcRecEvents, recs...)
-		if derr != nil {
-			if errors.Is(derr, context.Canceled) || errors.Is(derr, context.DeadlineExceeded) {
-				return allWarcRecEvents, derr
-			}
-			log.Printf("  download %s failed: %v", name, derr)
-			mediaDownloadErrs = append(mediaDownloadErrs, fmt.Errorf("download %s: %w", name, derr))
+		if downloadErr != nil {
+			return allWarcRecEvents, downloadErr
+		}
+		if savedURL == "" {
+			a.logger.Info("media unavailable after retries; preserving partial archive", zap.String("filename", name), zap.Int("mirrors", len(group)))
 			continue
 		}
-		meta.Files = append(meta.Files, FileRef{VID: t.ID, Ext: t.Ext, Size: t.Size, Filename: name, Source: t.Source})
-		log.Printf("  saved %s", name)
+		meta.Files = append(meta.Files, FileRef{VID: primary.ID, Ext: primary.Ext, Size: primary.Size, Filename: name, Source: primary.Source})
+		a.logger.Info("saved media", zap.String("filename", name), zap.String("url", savedURL))
 	}
 
-	log.Printf("=== VID %s done: %d files ===", vid, len(meta.Files))
-	return allWarcRecEvents, errors.Join(mediaDownloadErrs...)
+	a.logger.Info("finished VID archive", zap.Int("files", len(meta.Files)))
+	return allWarcRecEvents, nil
 }
 
-// untag 仅用于给 dedupeByETag 喂数据，保留指针关联。
-func untag(in []taggedCandidate) []Candidate {
-	out := make([]Candidate, len(in))
-	for i, c := range in {
-		out[i] = c.Candidate
+func (a *Archiver) downloadCandidateGroup(ctx context.Context, filename string, group []taggedCandidate) (events []warc.RecordEvent, savedURL string, err error) {
+	var hardErrors []error
+	for _, candidate := range group {
+		a.logger.Info("downloading media", zap.String("filename", filename), zap.String("url", candidate.URL), zap.Int64("size", candidate.Size))
+		records, downloadErr := a.download(ctx, candidate.URL)
+		events = append(events, records...)
+		if downloadErr == nil {
+			return events, candidate.URL, nil
+		}
+		if ctx.Err() != nil {
+			return events, "", context.Cause(ctx)
+		}
+		a.logger.Info("media download failed", zap.String("filename", filename), zap.String("url", candidate.URL), zap.Error(downloadErr))
+		if !isHTTPStatus(downloadErr, 404) {
+			hardErrors = append(hardErrors, fmt.Errorf("download %s from %s: %w", filename, candidate.URL, downloadErr))
+		}
 	}
-	return out
+	return events, "", errors.Join(hardErrors...)
+}
+
+func (a *Archiver) groupCandidatesByETag(candidates []taggedCandidate) [][]taggedCandidate {
+	groupIndexes := make(map[string]int)
+	groups := make([][]taggedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		key := candidate.ETag
+		if key == "" {
+			key = "\x00" + candidate.URL
+		}
+		if index, ok := groupIndexes[key]; ok {
+			groups[index] = append(groups[index], candidate)
+			a.logger.Info("dedupe fallback",
+				zap.String("url", candidate.URL),
+				zap.String("primary_url", groups[index][0].URL),
+				zap.String("etag", candidate.ETag),
+			)
+			continue
+		}
+		groupIndexes[key] = len(groups)
+		groups = append(groups, []taggedCandidate{candidate})
+	}
+	return groups
 }

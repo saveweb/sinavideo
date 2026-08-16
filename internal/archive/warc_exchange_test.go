@@ -81,7 +81,7 @@ func TestDownloadRetriesTransientFailure(t *testing.T) {
 	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 7)
 }
 
-func TestDownloadDoesNotRetryHTTPStatus(t *testing.T) {
+func TestDownloadRetriesNotFound(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		requests.Add(1)
@@ -94,8 +94,121 @@ func TestDownloadDoesNotRetryHTTPStatus(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "http 404") {
 		t.Fatalf("download error = %v, want HTTP 404", err)
 	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("requests = %d, want 3", got)
+	}
+	if len(events) != 6 {
+		t.Fatalf("record events = %d, want three request/response pairs", len(events))
+	}
+	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 7)
+}
+
+func TestDownloadDoesNotRetryTeapot(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		requests.Add(1)
+		stdhttp.Error(w, "teapot", stdhttp.StatusTeapot)
+	}))
+	defer server.Close()
+	warcClient, outputDirectory := installTestWARCClient(t)
+
+	events, err := newTestArchiver(t, warcClient).downloadWithRetry(t.Context(), server.URL, time.Second, 3, func(int) time.Duration { return 0 })
+	if err == nil || !strings.Contains(err.Error(), "http 418") {
+		t.Fatalf("download error = %v, want HTTP 418", err)
+	}
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("requests = %d, want 1", got)
+	}
+	assertHTTPRecordEvents(t, events, false)
+	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)
+}
+
+func TestDownloadCandidateGroupFallsBackAfterNotFound(t *testing.T) {
+	oldBackoff := mediaDownloadBackoff
+	mediaDownloadBackoff = [...]time.Duration{0, 0}
+	t.Cleanup(func() { mediaDownloadBackoff = oldBackoff })
+
+	var primaryRequests atomic.Int32
+	primary := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		primaryRequests.Add(1)
+		stdhttp.Error(w, "missing", stdhttp.StatusNotFound)
+	}))
+	defer primary.Close()
+	var fallbackRequests atomic.Int32
+	fallback := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		fallbackRequests.Add(1)
+		_, _ = io.WriteString(w, "video")
+	}))
+	defer fallback.Close()
+	warcClient, outputDirectory := installTestWARCClient(t)
+
+	group := []taggedCandidate{
+		{Candidate: Candidate{URL: primary.URL, ETag: "same"}},
+		{Candidate: Candidate{URL: fallback.URL, ETag: "same"}},
+	}
+	events, savedURL, err := newTestArchiver(t, warcClient).downloadCandidateGroup(t.Context(), "video.mp4", group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if savedURL != fallback.URL {
+		t.Fatalf("saved URL = %q, want fallback %q", savedURL, fallback.URL)
+	}
+	if primaryRequests.Load() != 3 || fallbackRequests.Load() != 1 {
+		t.Fatalf("requests = primary %d, fallback %d; want 3 and 1", primaryRequests.Load(), fallbackRequests.Load())
+	}
+	if len(events) != 8 {
+		t.Fatalf("record events = %d, want four request/response pairs", len(events))
+	}
+	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 9)
+}
+
+func TestDownloadCandidateGroupPreservesPartialArchiveAfterNotFound(t *testing.T) {
+	oldBackoff := mediaDownloadBackoff
+	mediaDownloadBackoff = [...]time.Duration{0, 0}
+	t.Cleanup(func() { mediaDownloadBackoff = oldBackoff })
+
+	var requests atomic.Int32
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		requests.Add(1)
+		stdhttp.Error(w, "missing", stdhttp.StatusNotFound)
+	}))
+	defer server.Close()
+	warcClient, outputDirectory := installTestWARCClient(t)
+
+	events, savedURL, err := newTestArchiver(t, warcClient).downloadCandidateGroup(t.Context(), "video.mp4", []taggedCandidate{{Candidate: Candidate{URL: server.URL}}})
+	if err != nil {
+		t.Fatalf("persistent HTTP 404 should be soft: %v", err)
+	}
+	if savedURL != "" {
+		t.Fatalf("saved URL = %q, want empty", savedURL)
+	}
+	if requests.Load() != 3 {
+		t.Fatalf("requests = %d, want 3", requests.Load())
+	}
+	if len(events) != 6 {
+		t.Fatalf("record events = %d, want three request/response pairs", len(events))
+	}
+	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 7)
+}
+
+func TestDownloadCandidateGroupReturnsHardErrorWhenAllMirrorsFail(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		requests.Add(1)
+		stdhttp.Error(w, "teapot", stdhttp.StatusTeapot)
+	}))
+	defer server.Close()
+	warcClient, outputDirectory := installTestWARCClient(t)
+
+	events, savedURL, err := newTestArchiver(t, warcClient).downloadCandidateGroup(t.Context(), "video.mp4", []taggedCandidate{{Candidate: Candidate{URL: server.URL}}})
+	if err == nil || !strings.Contains(err.Error(), "http 418") {
+		t.Fatalf("download error = %v, want HTTP 418", err)
+	}
+	if savedURL != "" {
+		t.Fatalf("saved URL = %q, want empty", savedURL)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("requests = %d, want 1", requests.Load())
 	}
 	assertHTTPRecordEvents(t, events, false)
 	assertStrictFinalizedWARC(t, warcClient, outputDirectory, 3)

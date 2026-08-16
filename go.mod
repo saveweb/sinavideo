@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/saveweb/canner v0.0.0-20260813174136-c0a1182d3493
 	github.com/saveweb/fhttp v0.0.0-20260813052251-339e498ce2d1
-	github.com/saveweb/gowarc v0.0.0-20260813070235-8859bc2016f4
+	github.com/saveweb/gowarc v0.0.0-20260816050302-57dab908491b
 	github.com/saveweb/hq v0.0.0-20260730031644-3d8160486855
 	github.com/saveweb/unwarc v0.0.0-20260715014326-30ffdd449473
 	go.uber.org/zap v1.28.0

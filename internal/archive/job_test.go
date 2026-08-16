@@ -88,11 +88,11 @@ func TestArchiveHonorsCanceledContext(t *testing.T) {
 	}
 }
 
-func TestLiveArchiveAndCannerUpload(t *testing.T) {
+func TestLiveArchiveAndOptionalCannerUpload(t *testing.T) {
 	vid := os.Getenv("SINAVIDEO_LIVE_VID")
 	cannerURL := os.Getenv("SINAVIDEO_TEST_CANNER_URL")
-	if vid == "" || cannerURL == "" {
-		t.Skip("set SINAVIDEO_LIVE_VID and SINAVIDEO_TEST_CANNER_URL to run the live archive test")
+	if vid == "" {
+		t.Skip("set SINAVIDEO_LIVE_VID to run the live archive test")
 	}
 	archiver := New(zap.NewNop(), t.TempDir(), t.TempDir())
 	warcPath, archiveErr, err := archiver.ArchiveJob(t.Context(), 9000001, vid, "test-archivist", "archive.test")
@@ -105,6 +105,30 @@ func TestLiveArchiveAndCannerUpload(t *testing.T) {
 	info, err := os.Stat(warcPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	file, err := os.Open(warcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := unwarc.NewScanner(file, unwarc.DefaultScannerOptions())
+	if err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	records := 0
+	for scanner.Next() {
+		records++
+	}
+	scanErr := scanner.Err()
+	closeErr := errors.Join(scanner.Close(), file.Close())
+	if err := errors.Join(scanErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	if records < 3 {
+		t.Fatalf("strict scan found %d records, want at least warcinfo, HTTP records, and metadata", records)
+	}
+	if cannerURL == "" {
+		return
 	}
 	canner, err := cannerclient.New(cannerURL)
 	if err != nil {

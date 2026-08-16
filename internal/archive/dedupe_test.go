@@ -2,45 +2,48 @@ package archive
 
 import (
 	"testing"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
-// 模拟三源共享 + 独占的真实分布（对照 info.md 2.4 的批量测试结果）。
-func TestDedupeByETag(t *testing.T) {
-	cands := []Candidate{
-		// 同一文件，三源都命中 → ETag 一同，应合并为 1
-		{URL: "s3.ivideo/x.flv", Ext: "flv", ETag: "AAA"},
-		{URL: "edge.v.iask/x.flv", Ext: "flv", ETag: "AAA"},
-		{URL: "edge.ivideo/x.flv", Ext: "flv", ETag: "AAA"},
-		// 不同内容（不同 ext）→ 不同 ETag，各自保留
-		{URL: "s3.ivideo/x.hlv", Ext: "hlv", ETag: "BBB"},
-		// ipad 低清 mp4 → 又一个不同 ETag，保留
-		{URL: "s3.ivideo/y.mp4", Ext: "mp4", ETag: "CCC"},
-		// s3 独占文件（另两源 404 未进入候选）
-		{URL: "s3.ivideo/z.flv", Ext: "flv", ETag: "DDD"},
-		// 无 ETag 的两个 URL → 视为各自独立，都保留
-		{URL: "s3.ivideo/w.flv", Ext: "flv", ETag: ""},
-		{URL: "edge.v.iask/w.flv", Ext: "flv", ETag: ""},
+func TestGroupCandidatesByETagKeepsFallbacks(t *testing.T) {
+	core, observed := observer.New(zap.InfoLevel)
+	a := &Archiver{logger: zap.New(core)}
+	candidates := []taggedCandidate{
+		{Candidate: Candidate{URL: "http://primary/video.mp4", ETag: "same"}, ID: "42", Source: "main"},
+		{Candidate: Candidate{URL: "http://mirror/video.mp4", ETag: "same"}, ID: "42", Source: "main"},
+		{Candidate: Candidate{URL: "http://other/video.mp4"}, ID: "43", Source: "ipad"},
 	}
 
-	got := dedupeByETag(cands)
-
-	// 期望：AAA(1) + BBB(1) + CCC(1) + DDD(1) + 无ETag×2 = 6
-	want := 6
-	if len(got) != want {
-		t.Fatalf("len = %d, want %d: %+v", len(got), want, got)
+	groups := a.groupCandidatesByETag(candidates)
+	if len(groups) != 2 {
+		t.Fatalf("groups = %d, want 2", len(groups))
 	}
-
-	// AAA 应只出现一次，且是 sourceServers 排序最靠前的 s3.ivideo（去重保留首次出现）
-	aaaCount := 0
-	for _, c := range got {
-		if c.ETag == "AAA" {
-			aaaCount++
-			if c.URL != "s3.ivideo/x.flv" {
-				t.Errorf("AAA kept wrong url: %s", c.URL)
-			}
-		}
+	if len(groups[0]) != 2 {
+		t.Fatalf("fallbacks = %d, want 2", len(groups[0]))
 	}
-	if aaaCount != 1 {
-		t.Errorf("AAA count = %d, want 1", aaaCount)
+	if groups[0][0].URL != candidates[0].URL || groups[0][1].URL != candidates[1].URL {
+		t.Fatalf("fallback order = %v, want primary then mirror", groups[0])
+	}
+	entries := observed.FilterMessage("dedupe fallback").All()
+	if len(entries) != 1 {
+		t.Fatalf("dedupe fallback logs = %d, want 1", len(entries))
+	}
+	fields := entries[0].ContextMap()
+	if fields["url"] != candidates[1].URL || fields["primary_url"] != candidates[0].URL || fields["etag"] != "same" {
+		t.Fatalf("dedupe fallback fields = %#v", fields)
+	}
+}
+
+func TestDownloadRetryPolicy(t *testing.T) {
+	if !shouldRetryDownload(&httpStatusError{code: 404}) {
+		t.Fatal("HTTP 404 should be retried locally")
+	}
+	if !shouldRetryDownload(&httpStatusError{code: 502}) {
+		t.Fatal("HTTP 502 should be retried locally")
+	}
+	if shouldRetryDownload(&httpStatusError{code: 418}) {
+		t.Fatal("HTTP 418 should fail the job without local retry")
 	}
 }
