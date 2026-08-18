@@ -79,12 +79,12 @@ func shouldRetryProbe(err error) bool {
 // CDN 入口（cdn.sinacloud.net）已注释关闭以节省带宽；必要时可取消注释。
 var sourceServers = []string{
 	// sina_api.md 推荐的源站，当前最大的活桶（5.27 亿对象）
-	"http://s3.ivideo.sina.com.cn/%s.%s", // http://sinacloud.net/s3.ivideo.sina.com.cn/
+	"https://s3.ivideo.sina.com.cn/%s.%s", // http://sinacloud.net/s3.ivideo.sina.com.cn/
 	// 直连存储桶
-	"http://sinacloud.net/edge.v.iask.com/%s.%s",
-	"http://sinacloud.net/edge.ivideo.sina.com.cn/%s.%s",
-	// "http://cdn.sinacloud.net/edge.v.iask.com/%s.%s",
-	// "http://cdn.sinacloud.net/edge.ivideo.sina.com.cn/%s.%s",
+	"https://sinacloud.net/edge.v.iask.com/%s.%s",
+	"https://sinacloud.net/edge.ivideo.sina.com.cn/%s.%s",
+	// "https://cdn.sinacloud.net/edge.v.iask.com/%s.%s",
+	// "https://cdn.sinacloud.net/edge.ivideo.sina.com.cn/%s.%s",
 }
 
 // Candidate 是一次探测命中的候选下载项。

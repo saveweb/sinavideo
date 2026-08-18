@@ -48,21 +48,21 @@ s3.ivideo.sina.com.cn/{vid}.[flv|hlv]
 
 | 链接格式 | 别称 | 覆盖范围 |
 |---------|------|---------|
-| `http://cdn.sinacloud.net/edge.v.iask.com/{vid}.{ext}` | 爱问服务器 | 2007–2016（数据更全） |
-| `http://cdn.sinacloud.net/edge.ivideo.sina.com.cn/{vid}.{ext}` | SQL 服务器 | 2016–至今 |
+| `https://cdn.sinacloud.net/edge.v.iask.com/{vid}.{ext}` | 爱问服务器 | 2007–2016（数据更全） |
+| `https://cdn.sinacloud.net/edge.ivideo.sina.com.cn/{vid}.{ext}` | SQL 服务器 | 2016–至今 |
 
 ### 2.3 直连存储桶（去掉 `cdn.` 前缀）
 
 | 链接格式 | 说明 |
 |---------|------|
-| `http://sinacloud.net/edge.v.iask.com/{vid}.{ext}` | 直连爱问存储桶 |
-| `http://sinacloud.net/edge.ivideo.sina.com.cn/{vid}.{ext}` | 直连 SQL 存储桶 |
+| `https://sinacloud.net/edge.v.iask.com/{vid}.{ext}` | 直连爱问存储桶 |
+| `https://sinacloud.net/edge.ivideo.sina.com.cn/{vid}.{ext}` | 直连 SQL 存储桶 |
 
 CDN 返回 404 时可尝试直连存储桶，部分文件在 CDN 上已清除但存储桶中仍存在。
 
 修改域名前缀（如 `cdn.sinacloud.net` → `xxx.sinacloud.net`）会返回 `BucketNotFound`，说明存储桶名与域名绑定。
 
-> `http://cdn.sinacloud.net/edge.v.iask.com//` 返回一张图片（key 为 `//`），可用于验证存储桶是否在线。
+> `https://cdn.sinacloud.net/edge.v.iask.com//` 返回一张图片（key 为 `//`），可用于验证存储桶是否在线。
 
 ### 2.4 三个源站共享数据但覆盖范围不同（务必都探测）
 
@@ -95,7 +95,7 @@ CDN 返回 404 时可尝试直连存储桶，部分文件在 CDN 上已清除但
 | `edge.ivideo.sina.com.cn` | — | — | — | — | 拒绝读 meta（`no read acl`），但能 GET 文件 |
 | `s3.ivideo.sina.com.cn` | S3Trans | 527,662,202 | ~5.03 PB | 2012-02-13 | 当前最大的活桶 |
 
-查询命令：`curl "http://sinacloud.net/<bucket>/?meta&formatter=json"`
+查询命令：`curl "https://sinacloud.net/<bucket>/?meta&formatter=json"`
 
 ### 2.6 文件格式
 
@@ -135,7 +135,7 @@ https://s.video.sina.com.cn/video/getvideoidbyvid?vid={vid}
 **未失效视频**：
 
 ```
-http://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id={video_id}
+https://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id={video_id}
 ```
 
 返回示例：
@@ -164,8 +164,8 @@ http://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinap
 **其他等价 API**：
 
 ```
-http://s.video.sina.com.cn/video/play?video_id={video_id}
-http://s.video.sina.com.cn/video/h5play?video_id={video_id}
+https://s.video.sina.com.cn/video/play?video_id={video_id}
+https://s.video.sina.com.cn/video/h5play?video_id={video_id}
 ```
 
 **2011 年及之后的失效视频**（play API 返回「视频已删除」时）：
@@ -177,7 +177,7 @@ https://interface.sina.cn/video/wap/videoinfo.d.json?vid={vid}
 响应中的 `data.mp4vid` 可能在 play API 已失效且 `ipad_vid=false` 时仍指向可用的低清整段 MP4。拿到后访问：
 
 ```
-http://s3.ivideo.sina.com.cn/{mp4vid}.mp4
+https://s3.ivideo.sina.com.cn/{mp4vid}.mp4
 ```
 
 若响应包含 `data.image`，存档器也会实际下载该图片并写入 WARC，而不只保存图片 URL。主 play API 返回的 `image` 同样会被下载；重复 URL 只请求一次。图片不计入视频文件数量。
@@ -185,13 +185,13 @@ http://s3.ivideo.sina.com.cn/{mp4vid}.mp4
 **新浪视频播放页**：
 
 ```
-http://video.sina.com.cn/view/{video_id}.html
+https://video.sina.com.cn/view/{video_id}.html
 ```
 
 ### 3.3 通过 vid 获取 ipad_vid（低清 MP4）
 
 ```
-http://video.sina.com.cn/interface/video_ids/video_ids.php?v={vid}
+https://video.sina.com.cn/interface/video_ids/video_ids.php?v={vid}
 ```
 
 返回示例：
@@ -211,7 +211,7 @@ http://video.sina.com.cn/interface/video_ids/video_ids.php?v={vid}
 ### 3.4 play/url API（直接获取视频/链接）
 
 ```
-http://api.ivideo.sina.com.cn/public/video/play/url?appname=web&appver=web&applt=web&tags=popview&direct=1&vid={vid}
+https://api.ivideo.sina.com.cn/public/video/play/url?appname=web&appver=web&applt=web&tags=popview&direct=1&vid={vid}
 ```
 
 - `direct=1`：直接返回视频流

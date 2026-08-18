@@ -107,7 +107,7 @@ func isSourceUnavailable(err error) bool {
 // 返回的 ipadVID 在「该视频没有转码低清版（ipad_vid 为 false）」时返回空字符串与 nil error。
 // 视频时长 >6min 且被分段时，主 VID 拿不到原档，此时 ipad_vid 对应的低清 MP4 是 fallback 来源。
 func (a *Archiver) getIpadVID(ctx context.Context, vid string) (string, []warc.RecordEvent, error) {
-	url := "http://video.sina.com.cn/interface/video_ids/video_ids.php?v=" + vid
+	url := "https://video.sina.com.cn/interface/video_ids/video_ids.php?v=" + vid
 	a.logger.Info("getIpadVID", zap.String("url", url))
 	bodyBytes, recordsEvents, err := a.readWARCURL(ctx, url)
 	if err != nil {
@@ -162,7 +162,7 @@ func (a *Archiver) getWAPVideoInfo(ctx context.Context, vid string) (WAPVideoInf
 }
 
 func (a *Archiver) getPlayInfo(ctx context.Context, videoID string) (*PlayData, json.RawMessage, []warc.RecordEvent, error) {
-	url := "http://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id=" + videoID
+	url := "https://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id=" + videoID
 	a.logger.Info("getPlayInfo", zap.String("url", url))
 
 	raw, recordsEvents, err := a.readWARCURL(ctx, url)

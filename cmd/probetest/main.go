@@ -17,9 +17,9 @@ import (
 )
 
 var sourceServers = []string{
-	"http://s3.ivideo.sina.com.cn/%s.%s",
-	"http://sinacloud.net/edge.v.iask.com/%s.%s",
-	"http://sinacloud.net/edge.ivideo.sina.com.cn/%s.%s",
+	"https://s3.ivideo.sina.com.cn/%s.%s",
+	"https://sinacloud.net/edge.v.iask.com/%s.%s",
+	"https://sinacloud.net/edge.ivideo.sina.com.cn/%s.%s",
 }
 
 var exts = []string{"mp4", "flv", "hlv"}
@@ -109,7 +109,7 @@ func archiveDryRun(vid string, c *http.Client) {
 	// play API (严格 JSON 解析，与 api.go 一致)
 	fileids := []string{vid}
 	if videoID != "" {
-		pbody := curl("http://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id="+videoID, c)
+		pbody := curl("https://api.ivideo.sina.com.cn/public/video/play?appname=sinaplayer_pc&tags=sinaplayer_pc&applt=web&appver=V11220.210521.03&player=all&video_id="+videoID, c)
 		var play struct {
 			Code int `json:"code"`
 			Data struct {
@@ -153,7 +153,7 @@ func archiveDryRun(vid string, c *http.Client) {
 	fmt.Printf("  主档探测命中: %d 个候选\n", len(allCands))
 
 	// ipad_vid (严格 JSON 解析，处理 string|false 混合类型，与 api.go getIpadVID 一致)
-	ibody := curl("http://video.sina.com.cn/interface/video_ids/video_ids.php?v="+vid, c)
+	ibody := curl("https://video.sina.com.cn/interface/video_ids/video_ids.php?v="+vid, c)
 	ipadVID := ""
 	var ipadResp struct {
 		IpadVID json.RawMessage `json:"ipad_vid"`
